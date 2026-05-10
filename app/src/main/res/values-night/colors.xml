@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material3 Dynamic Color - Dark -->
+    <color name="md_theme_primary">#4EDBC6</color>
+    <color name="md_theme_onPrimary">#00382E</color>
+    <color name="md_theme_primaryContainer">#005046</color>
+    <color name="md_theme_onPrimaryContainer">#6FF7E2</color>
+    <color name="md_theme_secondary">#B1CDC3</color>
+    <color name="md_theme_onSecondary">#1B352E</color>
+    <color name="md_theme_secondaryContainer">#324C44</color>
+    <color name="md_theme_onSecondaryContainer">#CCE9DF</color>
+    <color name="md_theme_tertiary">#B6CBE2</color>
+    <color name="md_theme_onTertiary">#213347</color>
+    <color name="md_theme_error">#FFB4AB</color>
+    <color name="md_theme_onError">#690005</color>
+    <color name="md_theme_background">#191C1A</color>
+    <color name="md_theme_onBackground">#E1E3DF</color>
+    <color name="md_theme_surface">#191C1A</color>
+    <color name="md_theme_onSurface">#E1E3DF</color>
+</resources>

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZaralynChisel</string>
+    <string name="app_description">Minecraft Java Edition World Editor for Android</string>
+
+    <!-- Modes -->
+    <string name="mode_god">God Mode</string>
+    <string name="mode_player">Player Mode</string>
+    <string name="mode_god_description">2D Map Overview Editor</string>
+    <string name="mode_player_description">First-Person In-Game Style Editor</string>
+
+    <!-- Actions -->
+    <string name="action_open_world">Open World</string>
+    <string name="action_select_folder">Select World Folder</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_confirm">Confirm</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_cut">Cut</string>
+    <string name="action_paste">Paste</string>
+    <string name="action_undo">Undo</string>
+    <string name="action_redo">Redo</string>
+    <string name="action_settings">Settings</string>
+    <string name="action_export">Export</string>
+    <string name="action_import">Import</string>
+
+    <!-- God Mode -->
+    <string name="god_select">Select Area</string>
+    <string name="god_delete_chunks">Delete Chunks</string>
+    <string name="god_void_area">Void Area</string>
+    <string name="god_show_grid">Show Grid</string>
+    <string name="god_zoom_in">Zoom In</string>
+    <string name="god_zoom_out">Zoom Out</string>
+
+    <!-- Player Mode -->
+    <string name="player_place_block">Place Block</string>
+    <string name="player_break_block">Break Block</string>
+    <string name="player_pick_block">Pick Block</string>
+    <string name="player_edit_nbt">Edit NBT</string>
+    <string name="player_toggle_collision">Toggle Collision</string>
+    <string name="player_show_chunk_grid">Show Chunk Grid</string>
+
+    <!-- File Picker -->
+    <string name="picker_title">Select World Folder</string>
+    <string name="picker_no_worlds">No Minecraft worlds found in this location</string>
+    <string name="picker_use_saf">Use System File Picker</string>
+    <string name="picker_browse_manually">Browse Manually</string>
+    <string name="picker_recent_worlds">Recent Worlds</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_auto">Auto</string>
+    <string name="settings_accent_color">Accent Color</string>
+    <string name="settings_max_memory">Max Memory</string>
+    <string name="settings_render_distance">Render Distance</string>
+    <string name="settings_batch_size">Batch Size</string>
+    <string name="settings_undo_limit">Undo Limit</string>
+    <string name="settings_texture_cache">Texture Cache</string>
+    <string name="settings_clear_cache">Clear Cache</string>
+    <string name="settings_about">About</string>
+
+    <!-- Errors -->
+    <string name="error_no_textures">No textures available. Player Mode unavailable.</string>
+    <string name="error_corrupted_chunk">Corrupted chunk detected, skipping…</string>
+    <string name="error_world_not_found">World folder not found or invalid</string>
+    <string name="error_permission_denied">Permission denied</string>
+
+    <!-- Status -->
+    <string name="status_loading">Loading…</string>
+    <string name="status_processing">Processing…</string>
+    <string name="status_complete">Complete</string>
+    <string name="status_error">Error</string>
+</resources>

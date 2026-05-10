@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(java *)",
+      "Bash(kotlin *)",
+      "Bash(ls *)",
+      "Bash(gh *)",
+      "Bash(apt *)",
+      "Bash(uname *)",
+      "Bash(mkdir *)",
+      "Bash(curl *)",
+      "Bash(unzip *)",
+      "Bash(mv *)",
+      "Bash(rm *)"
+    ]
+  },
+  "$version": 4
+}

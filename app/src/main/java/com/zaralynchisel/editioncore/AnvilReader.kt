@@ -1,0 +1,136 @@
+package com.zaralynchisel.editioncore
+
+import com.zaralynchisel.utils.Logger
+import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+
+/**
+ * Reads Minecraft Anvil (.mca) region files.
+ * Uses Hephaistos under the hood for NBT parsing.
+ *
+ * This is a high-level wrapper that provides chunk-level access
+ * to region files. Actual NBT serialization is delegated to Hephaistos.
+ */
+class AnvilReader(private val regionFile: File) {
+
+    private var raf: RandomAccessFile? = null
+
+    /**
+     * Open the region file for reading.
+     */
+    fun open(): Boolean {
+        return try {
+            if (!regionFile.exists() || !regionFile.isFile) {
+                Logger.e("Region file not found: ${regionFile.absolutePath}")
+                return false
+            }
+            raf = RandomAccessFile(regionFile, "r")
+            Logger.d("Opened region: ${regionFile.name}")
+            true
+        } catch (e: Exception) {
+            Logger.e("Failed to open region file", e)
+            false
+        }
+    }
+
+    /**
+     * Read chunk header (location and timestamp) for a given chunk coordinate.
+     * Chunk coordinates are local to this region (0-31).
+     */
+    fun readChunkHeader(localX: Int, localZ: Int): ChunkHeader? {
+        val file = raf ?: return null
+        return try {
+            val offset = 4 * (localX + localZ * 32)
+
+            // Read location (4 bytes: 3 bytes offset, 1 byte sector count)
+            file.seek(offset.toLong())
+            val locationBuffer = ByteArray(4)
+            file.readFully(locationBuffer)
+            val sectorOffset = ((locationBuffer[0].toInt() and 0xFF) shl 16) or
+                    ((locationBuffer[1].toInt() and 0xFF) shl 8) or
+                    (locationBuffer[2].toInt() and 0xFF)
+            val sectorCount = locationBuffer[3].toInt() and 0xFF
+
+            // Read timestamp (4 bytes)
+            file.seek((offset + 4096).toLong())
+            val timestampBuffer = ByteArray(4)
+            file.readFully(timestampBuffer)
+            val timestamp = ByteBuffer.wrap(timestampBuffer).int.toLong() and 0xFFFFFFFFL
+
+            ChunkHeader(
+                localX = localX,
+                localZ = localZ,
+                sectorOffset = sectorOffset,
+                sectorCount = sectorCount,
+                timestamp = timestamp
+            )
+        } catch (e: Exception) {
+            Logger.e("Failed to read chunk header at ($localX, $localZ)", e)
+            null
+        }
+    }
+
+    /**
+     * Read the raw compressed chunk data.
+     */
+    fun readChunkData(localX: Int, localZ: Int): ByteArray? {
+        val header = readChunkHeader(localX, localZ) ?: return null
+        if (header.sectorOffset == 0 || header.sectorCount == 0) return null
+
+        val file = raf ?: return null
+        return try {
+            val byteOffset = header.sectorOffset * 4096L
+            file.seek(byteOffset)
+
+            // Read chunk length (4 bytes) + compression type (1 byte)
+            val lengthBuffer = ByteArray(4)
+            file.readFully(lengthBuffer)
+            val chunkLength = ByteBuffer.wrap(lengthBuffer).int
+
+            if (chunkLength <= 1) return null
+
+            val compressionType = file.readByte().toInt() and 0xFF
+            val dataLength = chunkLength - 1  // minus compression type byte
+
+            val data = ByteArray(dataLength)
+            file.readFully(data)
+
+            data
+        } catch (e: Exception) {
+            Logger.e("Failed to read chunk data at ($localX, $localZ)", e)
+            null
+        }
+    }
+
+    /**
+     * Get all non-empty chunk positions in this region.
+     */
+    fun listChunks(): List<Pair<Int, Int>> {
+        val chunks = mutableListOf<Pair<Int, Int>>()
+        for (x in 0 until 32) {
+            for (z in 0 until 32) {
+                val header = readChunkHeader(x, z)
+                if (header != null && header.sectorOffset != 0 && header.sectorCount != 0) {
+                    chunks.add(Pair(x, z))
+                }
+            }
+        }
+        return chunks
+    }
+
+    fun close() {
+        try {
+            raf?.close()
+        } catch (_: Exception) { }
+        raf = null
+    }
+
+    data class ChunkHeader(
+        val localX: Int,
+        val localZ: Int,
+        val sectorOffset: Int,
+        val sectorCount: Int,
+        val timestamp: Long
+    )
+}
