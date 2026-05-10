@@ -35,26 +35,6 @@
             </intent-filter>
         </activity>
 
-        <!-- File picker activity -->
-        <activity
-            android:name=".ui.filepicker.FilePickerActivity"
-            android:exported="false"
-            android:theme="@style/Theme.ZaralynChisel" />
-
-        <!-- God mode activity -->
-        <activity
-            android:name=".ui.godmode.GodModeActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
-            android:theme="@style/Theme.ZaralynChisel" />
-
-        <!-- Player mode activity -->
-        <activity
-            android:name=".ui.playermode.PlayerModeActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
-            android:theme="@style/Theme.ZaralynChisel" />
-
     </application>
 
 </manifest>
