@@ -79,12 +79,6 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // Hephaistos - Anvil/NBT format (MIT licensed)
-    // Using a fork maintained for ARM compatibility
-    implementation("io.github.itzispyder.hephaistos:hephaistos:0.1.0") {
-        isTransitive = true
-    }
-
     // OpenGL ES 3.0 (included in Android SDK, no extra dependency)
 
     // Testing

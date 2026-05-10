@@ -1,8 +1,5 @@
 # ZaralynChisel ProGuard Rules
 
-# Keep Hephaistos NBT library
--keep class com.github.itzispyder.hephaistos.** { *; }
-
 # Keep serialization
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt
