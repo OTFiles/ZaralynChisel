@@ -18,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.zaralynchisel.ui.components.LogViewerScreen
 import com.zaralynchisel.ui.components.ZaralynChiselTheme
 import com.zaralynchisel.ui.filepicker.FilePickerScreen
 import com.zaralynchisel.ui.godmode.GodModeScreen
@@ -47,6 +48,7 @@ object NavRoutes {
     const val GOD_MODE = "god_mode/{worldPath}"
     const val PLAYER_MODE = "player_mode/{worldPath}"
     const val SETTINGS = "settings"
+    const val LOG_VIEWER = "log_viewer"
 
     fun godMode(worldPath: String) = "god_mode/$worldPath"
     fun playerMode(worldPath: String) = "player_mode/$worldPath"
@@ -114,7 +116,14 @@ fun ZaralynChiselNavHost() {
         }
 
         composable(NavRoutes.SETTINGS) {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenLogViewer = { navController.navigate(NavRoutes.LOG_VIEWER) }
+            )
+        }
+
+        composable(NavRoutes.LOG_VIEWER) {
+            LogViewerScreen(onBack = { navController.popBackStack() })
         }
     }
 }

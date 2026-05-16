@@ -11,7 +11,13 @@
       "Bash(curl *)",
       "Bash(unzip *)",
       "Bash(mv *)",
-      "Bash(rm *)"
+      "Bash(rm *)",
+      "Bash(git checkout *)",
+      "Bash(git push *)",
+      "WebFetch(www.gnu.org)",
+      "Bash(sed *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   },
   "$version": 4

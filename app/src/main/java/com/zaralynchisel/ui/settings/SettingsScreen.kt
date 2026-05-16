@@ -16,7 +16,7 @@ import com.zaralynchisel.utils.ThemeMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
     val prefs = ZaralynChiselApp.instance.preferenceManager
 
     var themeMode by remember { mutableStateOf(prefs.themeMode) }
@@ -32,7 +32,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -121,6 +121,15 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsClickableItem(
+                icon = Icons.Default.BugReport,
+                title = "View Logs",
+                subtitle = "In-app log viewer &amp; log files",
+                onClick = onOpenLogViewer
+            )
 
             // ── About ──────────────────────────────────────────────────
             SettingsSectionHeader("About")
