@@ -1,4 +1,5 @@
 package com.zaralynchisel.ui.playermode
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 
 import android.opengl.GLSurfaceView
 import androidx.compose.foundation.layout.*

@@ -17,7 +17,11 @@
       "WebFetch(www.gnu.org)",
       "Bash(sed *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(do)",
+      "Bash(then)",
+      "Bash(fi)",
+      "Bash(done)"
     ]
   },
   "$version": 4

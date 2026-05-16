@@ -1,4 +1,5 @@
 package com.zaralynchisel.ui.settings
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState

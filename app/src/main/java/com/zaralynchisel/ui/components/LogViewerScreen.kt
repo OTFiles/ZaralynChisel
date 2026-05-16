@@ -1,4 +1,5 @@
 package com.zaralynchisel.ui.components
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 
 import android.content.ClipData
 import android.content.ClipboardManager
