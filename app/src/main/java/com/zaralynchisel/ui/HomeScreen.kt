@@ -1,9 +1,5 @@
 package com.zaralynchisel.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -32,7 +28,7 @@ fun HomeScreen(
                 ),
                 actions = {
                     IconButton(onClick = onSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(Icons.Default.Settings, contentDescription = "设置")
                     }
                 }
             )
@@ -42,11 +38,11 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(24.dp),
+                .padding(horizontal = 24.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // App icon / logo area
+            // App icon
             Surface(
                 modifier = Modifier.size(120.dp),
                 shape = RoundedCornerShape(28.dp),
@@ -74,7 +70,7 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Minecraft Java Edition World Editor",
+                text = "Minecraft Java 版存档编辑器",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -93,88 +89,20 @@ fun HomeScreen(
                 Icon(Icons.Default.FolderOpen, contentDescription = null)
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "Open World",
+                    text = "打开世界",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.weight(1f))
 
-            // Mode selection cards
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                ModeCard(
-                    title = "God Mode",
-                    description = "2D Map Overview Editor",
-                    icon = Icons.Default.Map,
-                    onClick = onOpenWorld,
-                    modifier = Modifier.weight(1f)
-                )
-                ModeCard(
-                    title = "Player Mode",
-                    description = "First-Person Editor",
-                    icon = Icons.Default.VideogameAsset,
-                    onClick = onOpenWorld,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // Version info
+            // Version info - now with proper bottom spacing
             Text(
                 text = "v0.1.0-alpha",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun ModeCard(
-    title: String,
-    description: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        onClick = onClick,
-        modifier = modifier.height(140.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 8.dp)
             )
         }
     }

@@ -39,10 +39,10 @@ fun LogViewerScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Log Viewer") },
+                title = { Text("日志查看器") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
@@ -50,13 +50,13 @@ fun LogViewerScreen(onBack: () -> Unit) {
                         val text = Logger.getBufferedLogsText()
                         copyToClipboard(context, text, "Logs copied")
                     }) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy logs")
+                        Icon(Icons.Default.ContentCopy, contentDescription = "复制日志")
                     }
                     IconButton(onClick = {
                         Logger.clearBuffer()
                         logs = emptyList()
                     }) {
-                        Icon(Icons.Default.DeleteSweep, contentDescription = "Clear buffer")
+                        Icon(Icons.Default.DeleteSweep, contentDescription = "清空缓冲区")
                     }
                 }
             )
@@ -74,7 +74,7 @@ fun LogViewerScreen(onBack: () -> Unit) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("In-Memory (${logs.size})") }
+                    text = { Text("内存日志(${logs.size})") }
                 )
                 Tab(
                     selected = selectedTab == 1,
@@ -82,7 +82,7 @@ fun LogViewerScreen(onBack: () -> Unit) {
                         selectedTab = 1
                         logFiles = Logger.getLogFiles()
                     },
-                    text = { Text("Log Files (${logFiles.size})") }
+                    text = { Text("日志文件(${logFiles.size})") }
                 )
             }
 
@@ -122,12 +122,12 @@ fun LogViewerScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     copyToClipboard(context, fileContent ?: "", "File content copied")
                 }) {
-                    Text("Copy")
+                    Text("复制")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showFileDialog = false }) {
-                    Text("Close")
+                    Text("关闭")
                 }
             }
         )
@@ -282,7 +282,7 @@ private fun LogFilesView(
                         }
                         Icon(
                             Icons.Default.ChevronRight,
-                            contentDescription = "View",
+                            contentDescription = "查看",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

@@ -56,13 +56,13 @@ fun PlayerModeScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Player Mode requires Minecraft textures.\nPlease install a resource pack or enable network download.",
+                text = "Player 模式需要 Minecraft 纹理。\n请安装资源包或启用网络下载。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(24.dp))
             Button(onClick = onBack) {
-                Text("Return to God Mode")
+                Text("返回 God 模式")
             }
         }
         return
@@ -71,17 +71,17 @@ fun PlayerModeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Player Mode") },
+                title = { Text("Player 模式") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
                     IconButton(onClick = { showHud = !showHud }) {
                         Icon(
                             if (showHud) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                            contentDescription = "Toggle HUD"
+                            contentDescription = "切换 HUD"
                         )
                     }
                 }
@@ -98,21 +98,21 @@ fun PlayerModeScreen(
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
                     IconButton(onClick = { /* TODO: Pick block */ }) {
-                        Icon(Icons.Default.Colorize, contentDescription = "Pick Block")
+                        Icon(Icons.Default.Colorize, contentDescription = "选取方块")
                     }
                     IconButton(onClick = { /* TODO: Open inventory */ }) {
-                        Icon(Icons.Default.Inventory2, contentDescription = "Inventory")
+                        Icon(Icons.Default.Inventory2, contentDescription = "背包")
                     }
                     IconButton(onClick = { collisionEnabled = !collisionEnabled }) {
                         Icon(
                             if (collisionEnabled) Icons.Default.DirectionsWalk else Icons.Default.Flight,
-                            contentDescription = "Toggle Collision"
+                            contentDescription = "切换碰撞"
                         )
                     }
                     IconButton(onClick = { showChunkGrid = !showChunkGrid }) {
                         Icon(
                             if (showChunkGrid) Icons.Default.GridOn else Icons.Default.GridOff,
-                            contentDescription = "Chunk Grid"
+                            contentDescription = "区块网格"
                         )
                     }
                 }
@@ -150,15 +150,15 @@ fun PlayerModeScreen(
                 ) {
                     Column(modifier = Modifier.padding(8.dp)) {
                         Text(
-                            text = "XYZ: ${"%.1f".format(posX)} / ${"%.1f".format(posY)} / ${"%.1f".format(posZ)}",
+                            text = "坐标: ${"%.1f".format(posX)} / ${"%.1f".format(posY)} / ${"%.1f".format(posZ)}",
                             style = MaterialTheme.typography.labelSmall
                         )
                         Text(
-                            text = "Yaw: ${"%.1f".format(yaw)}° Pitch: ${"%.1f".format(pitch)}°",
+                            text = "偏航: ${"%.1f".format(yaw)}° 俯仰: ${"%.1f".format(pitch)}°",
                             style = MaterialTheme.typography.labelSmall
                         )
                         Text(
-                            text = "Collision: ${if (collisionEnabled) "ON" else "OFF"}",
+                            text = "碰撞: ${if (collisionEnabled) "开" else "关"}",
                             style = MaterialTheme.typography.labelSmall
                         )
                     }

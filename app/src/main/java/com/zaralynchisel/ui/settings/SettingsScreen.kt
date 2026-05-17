@@ -34,10 +34,10 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text("设置") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 }
             )
@@ -50,15 +50,15 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
                 .verticalScroll(rememberScrollState())
         ) {
             // ── Appearance ─────────────────────────────────────────────
-            SettingsSectionHeader("Appearance")
+            SettingsSectionHeader("外观")
 
             SettingsClickableItem(
                 icon = Icons.Default.DarkMode,
-                title = "Theme",
+                title = "主题",
                 subtitle = when (themeMode) {
-                    ThemeMode.LIGHT -> "Light"
-                    ThemeMode.DARK -> "Dark"
-                    ThemeMode.AUTO -> "Auto (System)"
+                    ThemeMode.LIGHT -> "浅色"
+                    ThemeMode.DARK -> "深色"
+                    ThemeMode.AUTO -> "自动(系统)"
                 },
                 onClick = { showThemeDialog = true }
             )
@@ -66,12 +66,12 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
             // ── Performance ────────────────────────────────────────────
-            SettingsSectionHeader("Performance")
+            SettingsSectionHeader("性能")
 
             SettingsSliderItem(
                 icon = Icons.Default.Visibility,
-                title = "Render Distance",
-                subtitle = "$renderDistance chunks",
+                title = "渲染距离",
+                subtitle = "$renderDistance 区块",
                 value = renderDistance.toFloat(),
                 valueRange = 4f..48f,
                 onValueChange = { renderDistance = it.toInt(); prefs.renderDistance = it.toInt() }
@@ -81,8 +81,8 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
 
             SettingsSliderItem(
                 icon = Icons.Default.BatchPrediction,
-                title = "Batch Size",
-                subtitle = "$batchSize chunks per batch",
+                title = "批处理大小",
+                subtitle = "每批 $batchSize 区块",
                 value = batchSize.toFloat(),
                 valueRange = 1f..64f,
                 onValueChange = { batchSize = it.toInt(); prefs.batchSize = it.toInt() }
@@ -92,8 +92,8 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
 
             SettingsSliderItem(
                 icon = Icons.Default.Undo,
-                title = "Undo Limit",
-                subtitle = "$undoLimit steps",
+                title = "撤销上限",
+                subtitle = "$undoLimit 步",
                 value = undoLimit.toFloat(),
                 valueRange = 5f..200f,
                 onValueChange = { undoLimit = it.toInt(); prefs.undoLimit = it.toInt() }
@@ -102,12 +102,12 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
             // ── Texture ────────────────────────────────────────────────
-            SettingsSectionHeader("Texture")
+            SettingsSectionHeader("纹理")
 
             SettingsSliderItem(
                 icon = Icons.Default.Storage,
-                title = "Texture Cache",
-                subtitle = "${textureCacheMb}MB (LRU)",
+                title = "纹理缓存",
+                subtitle = "${textureCacheMb}MB",
                 value = textureCacheMb.toFloat(),
                 valueRange = 64f..2048f,
                 steps = 15,
@@ -118,8 +118,8 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
 
             SettingsClickableItem(
                 icon = Icons.Default.DeleteSweep,
-                title = "Clear Texture Cache",
-                subtitle = "Remove all downloaded textures",
+                title = "清除纹理缓存",
+                subtitle = "删除所有下载的纹理",
                 onClick = {
                     File(app.cacheDir, "texture_cache").deleteRecursively()
                 }
@@ -131,13 +131,13 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
 
             SettingsClickableItem(
                 icon = Icons.Default.BugReport,
-                title = "View Logs",
-                subtitle = "In-app log viewer &amp; log files",
+                title = "查看日志",
+                subtitle = "应用内日志查看器和日志文件",
                 onClick = onOpenLogViewer
             )
 
             // ── About ──────────────────────────────────────────────────
-            SettingsSectionHeader("About")
+            SettingsSectionHeader("关于")
 
             Surface(
                 modifier = Modifier
@@ -161,7 +161,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Minecraft Java Edition world editor for Android.\nBuilt with Kotlin, Compose, and OpenGL ES 3.0.",
+                        text = "Minecraft Java 版存档编辑器\n使用 Kotlin + Compose + OpenGL ES 3.0 构建",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -176,7 +176,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
     if (showThemeDialog) {
         AlertDialog(
             onDismissRequest = { showThemeDialog = false },
-            title = { Text("Theme") },
+            title = { Text("主题") },
             text = {
                 Column {
                     ThemeMode.entries.forEach { mode ->
@@ -197,9 +197,9 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 text = when (mode) {
-                                    ThemeMode.LIGHT -> "Light"
-                                    ThemeMode.DARK -> "Dark"
-                                    ThemeMode.AUTO -> "Auto (System)"
+                                    ThemeMode.LIGHT -> "浅色"
+                                    ThemeMode.DARK -> "深色"
+                                    ThemeMode.AUTO -> "自动(系统)"
                                 }
                             )
                         }
@@ -208,7 +208,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
             },
             confirmButton = {
                 TextButton(onClick = { showThemeDialog = false }) {
-                    Text("Cancel")
+                    Text("取消")
                 }
             }
         )

@@ -1,5 +1,6 @@
 package com.zaralynchisel.ui
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -50,8 +51,9 @@ object NavRoutes {
     const val SETTINGS = "settings"
     const val LOG_VIEWER = "log_viewer"
 
-    fun godMode(worldPath: String) = "god_mode/$worldPath"
-    fun playerMode(worldPath: String) = "player_mode/$worldPath"
+    /** Encode worldPath so it's safe for use in a navigation route. */
+    fun godMode(worldPath: String) = "god_mode/${Uri.encode(worldPath)}"
+    fun playerMode(worldPath: String) = "player_mode/${Uri.encode(worldPath)}"
 }
 
 @Composable
@@ -83,8 +85,11 @@ fun ZaralynChiselNavHost() {
 
         composable(NavRoutes.FILE_PICKER) {
             FilePickerScreen(
-                onWorldSelected = { worldPath ->
+                onOpenGodMode = { worldPath ->
                     navController.navigate(NavRoutes.godMode(worldPath))
+                },
+                onOpenPlayerMode = { worldPath ->
+                    navController.navigate(NavRoutes.playerMode(worldPath))
                 },
                 onBack = { navController.popBackStack() }
             )
@@ -94,7 +99,7 @@ fun ZaralynChiselNavHost() {
             route = NavRoutes.GOD_MODE,
             arguments = listOf(navArgument("worldPath") { type = NavType.StringType })
         ) { backStackEntry ->
-            val worldPath = backStackEntry.arguments?.getString("worldPath") ?: return@composable
+            val worldPath = Uri.decode(backStackEntry.arguments?.getString("worldPath") ?: return@composable)
             GodModeScreen(
                 worldPath = worldPath,
                 onSwitchToPlayer = {
@@ -108,7 +113,7 @@ fun ZaralynChiselNavHost() {
             route = NavRoutes.PLAYER_MODE,
             arguments = listOf(navArgument("worldPath") { type = NavType.StringType })
         ) { backStackEntry ->
-            val worldPath = backStackEntry.arguments?.getString("worldPath") ?: return@composable
+            val worldPath = Uri.decode(backStackEntry.arguments?.getString("worldPath") ?: return@composable)
             PlayerModeScreen(
                 worldPath = worldPath,
                 onBack = { navController.popBackStack() }

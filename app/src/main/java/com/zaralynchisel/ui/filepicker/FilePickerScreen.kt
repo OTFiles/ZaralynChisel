@@ -1,5 +1,4 @@
 package com.zaralynchisel.ui.filepicker
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 
 import android.app.Activity
 import android.content.Intent
@@ -7,11 +6,11 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,19 +28,33 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FilePickerScreen(
-    onWorldSelected: (String) -> Unit,
+    onOpenGodMode: (String) -> Unit,
+    onOpenPlayerMode: (String) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val worldSelector = remember { WorldSelector(context) }
-    
 
     var recentWorlds by remember { mutableStateOf(worldSelector.getRecentWorlds()) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // SAF launcher for selecting a world folder
+    // Mode picker state
+    var pendingWorldPath by remember { mutableStateOf<String?>(null) }
+    var showModePicker by remember { mutableStateOf(false) }
+
+    // Manual path dialog state
+    var showManualPathDialog by remember { mutableStateOf(false) }
+    var manualPath by remember { mutableStateOf("") }
+
+    // After world is validated, show mode picker
+    fun onWorldValidated(path: String) {
+        pendingWorldPath = path
+        showModePicker = true
+    }
+
+    // SAF launcher
     val safLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
@@ -50,11 +63,9 @@ fun FilePickerScreen(
                 isLoading = true
                 errorMessage = null
                 try {
-                    // Take persistable permission
                     context.contentResolver.takePersistableUriPermission(
                         uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     )
-
                     val resolvedPath = worldSelector.resolveSafUri(uri)
                     if (resolvedPath != null) {
                         val validation = worldSelector.validateWorld(resolvedPath)
@@ -62,18 +73,18 @@ fun FilePickerScreen(
                             is WorldSelector.ValidationResult.Valid -> {
                                 worldSelector.rememberWorld(resolvedPath)
                                 recentWorlds = worldSelector.getRecentWorlds()
-                                onWorldSelected(resolvedPath)
+                                onWorldValidated(resolvedPath)
                             }
                             is WorldSelector.ValidationResult.Invalid -> {
                                 errorMessage = validation.reason
                             }
                         }
                     } else {
-                        errorMessage = "Could not resolve folder path"
+                        errorMessage = "无法解析文件夹路径"
                     }
                 } catch (e: Exception) {
                     Logger.e("SAF picker error", e)
-                    errorMessage = "Error: ${e.message}"
+                    errorMessage = "错误: ${e.message}"
                 } finally {
                     isLoading = false
                 }
@@ -84,10 +95,10 @@ fun FilePickerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Select World") },
+                title = { Text("选择世界") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(ArrowBack, contentDescription = "返回")
                     }
                 }
             )
@@ -109,20 +120,20 @@ fun FilePickerScreen(
             ) {
                 Icon(Icons.Default.FolderOpen, contentDescription = null)
                 Spacer(modifier = Modifier.width(12.dp))
-                Text("Browse with System File Picker", fontWeight = FontWeight.Medium)
+                Text("使用系统文件选择器", fontWeight = FontWeight.Medium)
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             // Manual path entry
             OutlinedButton(
-                onClick = { /* TODO: Show manual path input dialog */ },
+                onClick = { showManualPathDialog = true },
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.medium
             ) {
                 Icon(Icons.Default.Edit, contentDescription = null)
                 Spacer(modifier = Modifier.width(12.dp))
-                Text("Enter Path Manually")
+                Text("手动输入路径")
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -163,7 +174,7 @@ fun FilePickerScreen(
             // Recent worlds
             if (recentWorlds.isNotEmpty()) {
                 Text(
-                    text = "Recent Worlds",
+                    text = "最近打开的世界",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(vertical = 8.dp)
@@ -183,7 +194,7 @@ fun FilePickerScreen(
                                         val validation = worldSelector.validateWorld(worldPath)
                                         when (validation) {
                                             is WorldSelector.ValidationResult.Valid -> {
-                                                onWorldSelected(worldPath)
+                                                onWorldValidated(worldPath)
                                             }
                                             is WorldSelector.ValidationResult.Invalid -> {
                                                 errorMessage = validation.reason
@@ -206,7 +217,6 @@ fun FilePickerScreen(
                     }
                 }
             } else {
-                // Empty state
                 Spacer(modifier = Modifier.weight(1f))
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -220,12 +230,12 @@ fun FilePickerScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "No recent worlds",
+                        text = "没有最近的世界",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "Use the system file picker to navigate\nto your Minecraft saves folder",
+                        text = "使用系统文件选择器导航到\n您的 Minecraft 存档文件夹",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         modifier = Modifier.padding(top = 4.dp)
@@ -234,6 +244,126 @@ fun FilePickerScreen(
                 Spacer(modifier = Modifier.weight(1f))
             }
         }
+    }
+
+    // ── Mode selection dialog ─────────────────────────────────────────
+    if (showModePicker && pendingWorldPath != null) {
+        val path = pendingWorldPath!!
+        AlertDialog(
+            onDismissRequest = { showModePicker = false },
+            icon = {
+                Icon(Icons.Default.Map, contentDescription = null)
+            },
+            title = { Text("选择编辑模式") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "世界: ${File(path).name}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Button(
+                        onClick = {
+                            showModePicker = false
+                            onOpenGodMode(path)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Icon(Icons.Default.Map, contentDescription = null)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("创造模式 - 2D 地图概览编辑")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            showModePicker = false
+                            onOpenPlayerMode(path)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Icon(Icons.Default.VideogameAsset, contentDescription = null)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("游戏模式 - 第一人称编辑")
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showModePicker = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── Manual path entry dialog ──────────────────────────────────────
+    if (showManualPathDialog) {
+        AlertDialog(
+            onDismissRequest = { showManualPathDialog = false },
+            title = { Text("手动输入路径") },
+            text = {
+                Column {
+                    Text(
+                        text = "输入 Minecraft 存档文件夹的完整路径\n例如: /storage/emulated/0/games/com.mojang/minecraftWorlds/MyWorld",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = manualPath,
+                        onValueChange = { manualPath = it },
+                        label = { Text("路径") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showManualPathDialog = false
+                        if (manualPath.isNotBlank()) {
+                            scope.launch {
+                                isLoading = true
+                                errorMessage = null
+                                try {
+                                    val validation = worldSelector.validateWorld(manualPath)
+                                    when (validation) {
+                                        is WorldSelector.ValidationResult.Valid -> {
+                                            worldSelector.rememberWorld(manualPath)
+                                            recentWorlds = worldSelector.getRecentWorlds()
+                                            onWorldValidated(manualPath)
+                                        }
+                                        is WorldSelector.ValidationResult.Invalid -> {
+                                            errorMessage = validation.reason
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Logger.e("Manual path error", e)
+                                    errorMessage = "错误: ${e.message}"
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showManualPathDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
@@ -283,7 +413,7 @@ private fun RecentWorldCard(
             IconButton(onClick = onRemove) {
                 Icon(
                     Icons.Default.Close,
-                    contentDescription = "Remove from recent",
+                    contentDescription = "从最近列表移除",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

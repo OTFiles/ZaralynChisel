@@ -1,76 +1,76 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ZaralynChisel</string>
-    <string name="app_description">Minecraft Java Edition World Editor for Android</string>
+    <string name="app_description">Minecraft Java 版存档编辑器 - Android</string>
 
-    <!-- Modes -->
-    <string name="mode_god">God Mode</string>
-    <string name="mode_player">Player Mode</string>
-    <string name="mode_god_description">2D Map Overview Editor</string>
-    <string name="mode_player_description">First-Person In-Game Style Editor</string>
+    <!-- 模式 -->
+    <string name="mode_god">God 模式</string>
+    <string name="mode_player">Player 模式</string>
+    <string name="mode_god_description">2D 地图概览编辑</string>
+    <string name="mode_player_description">第一人称游戏内风格编辑</string>
 
-    <!-- Actions -->
-    <string name="action_open_world">Open World</string>
-    <string name="action_select_folder">Select World Folder</string>
-    <string name="action_cancel">Cancel</string>
-    <string name="action_confirm">Confirm</string>
-    <string name="action_delete">Delete</string>
-    <string name="action_copy">Copy</string>
-    <string name="action_cut">Cut</string>
-    <string name="action_paste">Paste</string>
-    <string name="action_undo">Undo</string>
-    <string name="action_redo">Redo</string>
-    <string name="action_settings">Settings</string>
-    <string name="action_export">Export</string>
-    <string name="action_import">Import</string>
+    <!-- 操作 -->
+    <string name="action_open_world">打开世界</string>
+    <string name="action_select_folder">选择存档文件夹</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_confirm">确认</string>
+    <string name="action_delete">删除</string>
+    <string name="action_copy">复制</string>
+    <string name="action_cut">剪切</string>
+    <string name="action_paste">粘贴</string>
+    <string name="action_undo">撤销</string>
+    <string name="action_redo">重做</string>
+    <string name="action_settings">设置</string>
+    <string name="action_export">导出</string>
+    <string name="action_import">导入</string>
 
-    <!-- God Mode -->
-    <string name="god_select">Select Area</string>
-    <string name="god_delete_chunks">Delete Chunks</string>
-    <string name="god_void_area">Void Area</string>
-    <string name="god_show_grid">Show Grid</string>
-    <string name="god_zoom_in">Zoom In</string>
-    <string name="god_zoom_out">Zoom Out</string>
+    <!-- God 模式 -->
+    <string name="god_select">选择区域</string>
+    <string name="god_delete_chunks">删除区块</string>
+    <string name="god_void_area">清空区域</string>
+    <string name="god_show_grid">显示网格</string>
+    <string name="god_zoom_in">放大</string>
+    <string name="god_zoom_out">缩小</string>
 
-    <!-- Player Mode -->
-    <string name="player_place_block">Place Block</string>
-    <string name="player_break_block">Break Block</string>
-    <string name="player_pick_block">Pick Block</string>
-    <string name="player_edit_nbt">Edit NBT</string>
-    <string name="player_toggle_collision">Toggle Collision</string>
-    <string name="player_show_chunk_grid">Show Chunk Grid</string>
+    <!-- Player 模式 -->
+    <string name="player_place_block">放置方块</string>
+    <string name="player_break_block">破坏方块</string>
+    <string name="player_pick_block">选取方块</string>
+    <string name="player_edit_nbt">编辑 NBT</string>
+    <string name="player_toggle_collision">切换碰撞</string>
+    <string name="player_show_chunk_grid">显示区块网格</string>
 
-    <!-- File Picker -->
-    <string name="picker_title">Select World Folder</string>
-    <string name="picker_no_worlds">No Minecraft worlds found in this location</string>
-    <string name="picker_use_saf">Use System File Picker</string>
-    <string name="picker_browse_manually">Browse Manually</string>
-    <string name="picker_recent_worlds">Recent Worlds</string>
+    <!-- 文件选择器 -->
+    <string name="picker_title">选择存档文件夹</string>
+    <string name="picker_no_worlds">此位置未找到 Minecraft 存档</string>
+    <string name="picker_use_saf">使用系统文件选择器</string>
+    <string name="picker_browse_manually">手动输入路径</string>
+    <string name="picker_recent_worlds">最近的世界</string>
 
-    <!-- Settings -->
-    <string name="settings_title">Settings</string>
-    <string name="settings_theme">Theme</string>
-    <string name="settings_theme_light">Light</string>
-    <string name="settings_theme_dark">Dark</string>
-    <string name="settings_theme_auto">Auto</string>
-    <string name="settings_accent_color">Accent Color</string>
-    <string name="settings_max_memory">Max Memory</string>
-    <string name="settings_render_distance">Render Distance</string>
-    <string name="settings_batch_size">Batch Size</string>
-    <string name="settings_undo_limit">Undo Limit</string>
-    <string name="settings_texture_cache">Texture Cache</string>
-    <string name="settings_clear_cache">Clear Cache</string>
-    <string name="settings_about">About</string>
+    <!-- 设置 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_theme">主题</string>
+    <string name="settings_theme_light">浅色</string>
+    <string name="settings_theme_dark">深色</string>
+    <string name="settings_theme_auto">自动</string>
+    <string name="settings_accent_color">强调色</string>
+    <string name="settings_max_memory">最大内存</string>
+    <string name="settings_render_distance">渲染距离</string>
+    <string name="settings_batch_size">批处理大小</string>
+    <string name="settings_undo_limit">撤销步数上限</string>
+    <string name="settings_texture_cache">纹理缓存</string>
+    <string name="settings_clear_cache">清除缓存</string>
+    <string name="settings_about">关于</string>
 
-    <!-- Errors -->
-    <string name="error_no_textures">No textures available. Player Mode unavailable.</string>
-    <string name="error_corrupted_chunk">Corrupted chunk detected, skipping…</string>
-    <string name="error_world_not_found">World folder not found or invalid</string>
-    <string name="error_permission_denied">Permission denied</string>
+    <!-- 错误 -->
+    <string name="error_no_textures">没有可用的纹理，Player 模式不可用。</string>
+    <string name="error_corrupted_chunk">检测到损坏的区块，正在跳过…</string>
+    <string name="error_world_not_found">未找到存档文件夹或文件夹无效</string>
+    <string name="error_permission_denied">权限被拒绝</string>
 
-    <!-- Status -->
-    <string name="status_loading">Loading…</string>
-    <string name="status_processing">Processing…</string>
-    <string name="status_complete">Complete</string>
-    <string name="status_error">Error</string>
+    <!-- 状态 -->
+    <string name="status_loading">加载中…</string>
+    <string name="status_processing">处理中…</string>
+    <string name="status_complete">完成</string>
+    <string name="status_error">错误</string>
 </resources>

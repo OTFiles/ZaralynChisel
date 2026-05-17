@@ -98,12 +98,12 @@ fun GodModeScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
                     IconButton(onClick = onSwitchToPlayer) {
-                        Icon(Icons.Default.VideogameAsset, contentDescription = "Switch to Player Mode")
+                        Icon(Icons.Default.VideogameAsset, contentDescription = "切换至游戏模式")
                     }
                 }
             )
@@ -120,27 +120,27 @@ fun GodModeScreen(
                 ) {
                     ToolbarButton(
                         icon = Icons.Default.Delete,
-                        label = "Delete",
+                        label = "删除",
                         onClick = { /* TODO: Show delete dialog */ }
                     )
                     ToolbarButton(
                         icon = Icons.Default.ContentCopy,
-                        label = "Copy",
+                        label = "复制",
                         onClick = { /* TODO: Copy selection */ }
                     )
                     ToolbarButton(
                         icon = Icons.Default.ContentCut,
-                        label = "Cut",
+                        label = "剪切",
                         onClick = { /* TODO: Cut selection */ }
                     )
                     ToolbarButton(
                         icon = Icons.Default.ContentPaste,
-                        label = "Paste",
+                        label = "粘贴",
                         onClick = { /* TODO: Paste */ }
                     )
                     ToolbarButton(
                         icon = if (showGrid) Icons.Default.GridOn else Icons.Default.GridOff,
-                        label = "Grid",
+                        label = "网格",
                         onClick = { showGrid = !showGrid }
                     )
                 }
@@ -220,13 +220,13 @@ fun GodModeScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         SmallFloatingActionButton(onClick = { zoom = (zoom * 1.5f).coerceAtMost(10f) }) {
-                            Icon(Icons.Default.Add, contentDescription = "Zoom In")
+                            Icon(Icons.Default.Add, contentDescription = "放大")
                         }
                         SmallFloatingActionButton(onClick = { zoom = (zoom / 1.5f).coerceAtLeast(0.1f) }) {
-                            Icon(Icons.Default.Remove, contentDescription = "Zoom Out")
+                            Icon(Icons.Default.Remove, contentDescription = "缩小")
                         }
                         SmallFloatingActionButton(onClick = { zoom = 1f; viewX = 0f; viewZ = 0f }) {
-                            Icon(Icons.Default.Home, contentDescription = "Reset View")
+                            Icon(Icons.Default.Home, contentDescription = "重置视图")
                         }
                     }
 
@@ -239,7 +239,7 @@ fun GodModeScreen(
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
                     ) {
                         Text(
-                            text = "Chunks: ${chunks.size} | Zoom: ${"%.1f".format(zoom)}x",
+                            text = "区块: ${chunks.size} | 缩放: ${"%.1f".format(zoom)}x",
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
