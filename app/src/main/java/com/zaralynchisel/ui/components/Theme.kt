@@ -62,7 +62,8 @@ fun ZaralynChiselTheme(
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
-    val prefs = ZaralynChiselApp.instance.preferenceManager
+    val app = context.applicationContext as ZaralynChiselApp
+    val prefs = app.preferenceManager
     val themeMode = prefs.themeMode
 
     val darkTheme = when (themeMode) {

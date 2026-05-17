@@ -21,7 +21,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.zaralynchisel.ZaralynChiselApp
 import com.zaralynchisel.fileaccess.WorldSelector
 import com.zaralynchisel.utils.Logger
 import kotlinx.coroutines.launch
@@ -36,7 +35,7 @@ fun FilePickerScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val worldSelector = remember { WorldSelector(context) }
-    val prefs = ZaralynChiselApp.instance.preferenceManager
+    
 
     var recentWorlds by remember { mutableStateOf(worldSelector.getRecentWorlds()) }
     var isLoading by remember { mutableStateOf(false) }

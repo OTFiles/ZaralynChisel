@@ -1,4 +1,6 @@
 package com.zaralynchisel.ui.settings
+import java.io.File
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 
 import androidx.compose.foundation.layout.*
@@ -18,7 +20,9 @@ import com.zaralynchisel.utils.ThemeMode
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
-    val prefs = ZaralynChiselApp.instance.preferenceManager
+    val context = LocalContext.current
+    val app = context.applicationContext as ZaralynChiselApp
+    val prefs = app.preferenceManager
 
     var themeMode by remember { mutableStateOf(prefs.themeMode) }
     var renderDistance by remember { mutableIntStateOf(prefs.renderDistance) }
@@ -117,7 +121,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
                 title = "Clear Texture Cache",
                 subtitle = "Remove all downloaded textures",
                 onClick = {
-                    ZaralynChiselApp.instance.cacheDir.resolve("texture_cache").deleteRecursively()
+                    File(app.cacheDir, "texture_cache").deleteRecursively()
                 }
             )
 
