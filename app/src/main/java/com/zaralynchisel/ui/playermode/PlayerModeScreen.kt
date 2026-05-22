@@ -124,7 +124,7 @@ fun PlayerModeScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // OpenGL view
+            // OpenGL view with touch gesture handling
             AndroidView(
                 factory = { ctx ->
                     GLSurfaceView(ctx).apply {
@@ -133,7 +133,36 @@ fun PlayerModeScreen(
                         renderer.viewConfig.showChunkGrid = showChunkGrid
                         setRenderer(renderer)
                         renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-                        tag = "player_renderer"
+                        tag = renderer  // Store for update lambda
+
+                        // Touch gesture: drag to rotate camera
+                        var lastX = 0f
+                        var lastY = 0f
+                        setOnTouchListener { _, event ->
+                            when (event.action) {
+                                android.view.MotionEvent.ACTION_DOWN -> {
+                                    lastX = event.x
+                                    lastY = event.y
+                                    true
+                                }
+                                android.view.MotionEvent.ACTION_MOVE -> {
+                                    val dx = event.x - lastX
+                                    val dy = event.y - lastY
+                                    yaw = (yaw + dx * 0.15f) % 360f
+                                    pitch = (pitch - dy * 0.15f).coerceIn(-89f, 89f)
+                                    renderer.updateCamera(posX, posY, posZ, yaw, pitch)
+                                    lastX = event.x
+                                    lastY = event.y
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                    }
+                },
+                update = { glView ->
+                    (glView.tag as? PlayerRenderer)?.let { r ->
+                        r.viewConfig.showChunkGrid = showChunkGrid
                     }
                 },
                 modifier = Modifier.fillMaxSize()

@@ -2,18 +2,16 @@ package com.zaralynchisel.fileaccess
 
 import android.content.Context
 import android.net.Uri
-import android.provider.DocumentsContract
-import com.zaralynchisel.editioncore.DimensionType
-import com.zaralynchisel.editioncore.WorldData
+import com.zaralynchisel.editioncore.*
 import com.zaralynchisel.utils.Logger
 import com.zaralynchisel.utils.PreferenceManager
 import com.zaralynchisel.utils.withFileIO
 import java.io.File
+import java.io.FileInputStream
 
 /**
  * Handles world selection and validation.
- * Users navigate to their world folder manually via SAF or built-in file browser.
- * No paths are pre-scanned — the user always chooses.
+ * Supports both direct file paths and SAF document trees.
  */
 class WorldSelector(private val context: Context) {
 
@@ -21,47 +19,58 @@ class WorldSelector(private val context: Context) {
 
     /**
      * Validate that a given path is a valid Minecraft world.
-     * Checks for level.dat and region folders.
      */
     suspend fun validateWorld(worldPath: String): ValidationResult {
         return withFileIO {
             val dir = File(worldPath)
+            Logger.i("Validating world at: $worldPath")
             if (!dir.exists() || !dir.isDirectory) {
-                return@withFileIO ValidationResult.Invalid("Path does not exist or is not a directory")
+                Logger.w("Path does not exist or is not directory: $worldPath")
+                return@withFileIO ValidationResult.Invalid("路径不存在或不是文件夹")
             }
-
             val levelDat = File(dir, "level.dat")
             if (!levelDat.exists()) {
-                return@withFileIO ValidationResult.Invalid("No level.dat found — not a Minecraft world")
+                Logger.w("No level.dat found at $worldPath")
+                return@withFileIO ValidationResult.Invalid("未找到 level.dat — 不是 Minecraft 存档")
             }
-
-            // Check for at least one region folder
             val hasRegion = DimensionType.entries.any { dim ->
                 File(dir, dim.folderName).exists()
             }
-
             if (!hasRegion) {
-                return@withFileIO ValidationResult.Invalid("No region files found — world may be empty or corrupted")
+                return@withFileIO ValidationResult.Invalid("未找到区域文件 — 存档可能为空或已损坏")
             }
-
+            Logger.i("World validated successfully: $worldPath")
             ValidationResult.Valid(worldPath)
         }
     }
 
     /**
-     * Load world metadata from level.dat.
+     * Load world metadata from level.dat using NbtReader.
      */
     suspend fun loadWorldInfo(worldPath: String): WorldData? {
         return withFileIO {
             try {
                 val dir = File(worldPath)
                 val levelDat = File(dir, "level.dat")
-
                 if (!levelDat.exists()) return@withFileIO null
 
-                // TODO: Parse level.dat with Hephaistos to extract:
-                // - LevelName, DataVersion, RandomSeed, SpawnX/SpawnZ, LastPlayed
-                // For now, return basic info from folder name
+                Logger.i("Reading level.dat from $worldPath")
+
+                val reader = FileInputStream(levelDat).use { stream ->
+                    NbtReader(stream)
+                }
+                val (_, rootCompound) = reader.readRoot()
+                val data = rootCompound.getCompound("Data")
+                    ?: rootCompound
+
+                val worldName = data.getString("LevelName", dir.name)
+                val dataVersion = data.getInt("DataVersion", 0)
+                val versionName = data.getCompound("Version")?.getString("Name", "unknown") ?: "unknown"
+                val seed = data.getLong("RandomSeed", 0L)
+                val spawnX = data.getInt("SpawnX", 0)
+                val spawnZ = data.getInt("SpawnZ", 0)
+                val lastPlayed = data.getLong("LastPlayed", 0L)
+
                 val dimensions = mutableMapOf<DimensionType, String>()
                 for (dim in DimensionType.entries) {
                     val regionDir = File(dir, dim.folderName)
@@ -70,12 +79,18 @@ class WorldSelector(private val context: Context) {
                     }
                 }
 
+                Logger.i("World loaded: $worldName (v$versionName, dataVer=$dataVersion, seed=$seed)")
+
                 WorldData(
-                    worldName = dir.name,
+                    worldName = worldName,
                     rootPath = dir.absolutePath,
                     dimensionPaths = dimensions,
-                    gameVersion = "unknown",
-                    dataVersion = 0
+                    gameVersion = versionName,
+                    dataVersion = dataVersion,
+                    seed = seed,
+                    spawnX = spawnX,
+                    spawnZ = spawnZ,
+                    lastPlayed = lastPlayed
                 )
             } catch (e: Exception) {
                 Logger.e("Failed to load world info from $worldPath", e)
@@ -85,20 +100,67 @@ class WorldSelector(private val context: Context) {
     }
 
     /**
-     * Register a world as recently opened.
+     * Scan region files for actual chunk positions in a dimension.
      */
+    suspend fun scanChunks(dimensionPath: String): List<ChunkInfo> {
+        return withFileIO {
+            val chunks = mutableListOf<ChunkInfo>()
+            try {
+                val regionDir = File(dimensionPath)
+                if (!regionDir.exists()) {
+                    Logger.w("Region directory not found: $dimensionPath")
+                    return@withFileIO chunks
+                }
+                val regionFiles = regionDir.listFiles { f ->
+                    f.name.matches(RegionFileNameRegex)
+                } ?: return@withFileIO chunks
+
+                val dim = DimensionType.fromFolder(dimensionPath) ?: DimensionType.OVERWORLD
+
+                for (regionFile in regionFiles) {
+                    val match = REGION_FILE_REGEX.find(regionFile.name) ?: continue
+                    val rx = match.groupValues[1].toInt()
+                    val rz = match.groupValues[2].toInt()
+
+                    Logger.d("Scanning region: ${regionFile.name}")
+
+                    val reader = AnvilReader(regionFile)
+                    if (reader.open()) {
+                        try {
+                            for (lx in 0 until 32) {
+                                for (lz in 0 until 32) {
+                                    val header = reader.readChunkHeader(lx, lz)
+                                    if (header != null && header.sectorOffset > 0 && header.sectorCount > 0) {
+                                        chunks.add(ChunkInfo(
+                                            x = (rx shl 5) + lx,
+                                            z = (rz shl 5) + lz,
+                                            dimension = dim,
+                                            timestamp = header.timestamp
+                                        ))
+                                    }
+                                }
+                            }
+                        } finally {
+                            reader.close()
+                        }
+                    } else {
+                        Logger.w("Failed to open region file: ${regionFile.name}")
+                    }
+                }
+                Logger.i("Scanned ${chunks.size} chunks in dimension $dim")
+            } catch (e: Exception) {
+                Logger.e("Failed to scan chunks", e)
+            }
+            chunks
+        }
+    }
+
     fun rememberWorld(worldPath: String) {
         prefs.addRecentWorld(worldPath)
     }
 
-    /**
-     * Get list of recently opened worlds.
-     */
     fun getRecentWorlds(): List<String> = prefs.getRecentWorlds()
 
-    /**
-     * Remove a world from recent list.
-     */
     fun forgetWorld(worldPath: String) {
         prefs.removeRecentWorld(worldPath)
     }
@@ -108,17 +170,19 @@ class WorldSelector(private val context: Context) {
      */
     fun resolveSafUri(uri: Uri): String? {
         return try {
-            val docId = DocumentsContract.getTreeDocumentId(uri)
-            // SAF URIs on Android typically look like:
-            // content://com.android.externalstorage.documents/tree/primary%3Apath
+            val docId = documentsContractCompat.getTreeDocumentId(uri)
+            Logger.d("SAF docId: $docId")
             if (docId.startsWith("primary:")) {
                 val path = docId.removePrefix("primary:")
-                "/storage/emulated/0/$path"
+                val resolved = "/storage/emulated/0/$path"
+                Logger.d("Resolved SAF to: $resolved")
+                resolved
             } else {
-                // External SD card or other storage
                 val parts = docId.split(":", limit = 2)
                 if (parts.size == 2) {
-                    "/storage/${parts[0]}/${parts[1]}"
+                    val resolved = "/storage/${parts[0]}/${parts[1]}"
+                    Logger.d("Resolved SAF to: $resolved")
+                    resolved
                 } else null
             }
         } catch (e: Exception) {
@@ -130,5 +194,16 @@ class WorldSelector(private val context: Context) {
     sealed class ValidationResult {
         data class Valid(val path: String) : ValidationResult()
         data class Invalid(val reason: String) : ValidationResult()
+    }
+
+    companion object {
+        private val RegionFileNameRegex = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
+        private val REGION_FILE_REGEX = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
+
+        // Wrap DocumentsContract for testability on non-Android platforms
+        private val documentsContractCompat = object {
+            fun getTreeDocumentId(uri: Uri): String =
+                android.provider.DocumentsContract.getTreeDocumentId(uri)
+        }
     }
 }

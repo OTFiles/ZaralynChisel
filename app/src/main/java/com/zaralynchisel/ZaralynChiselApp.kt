@@ -21,6 +21,7 @@ class ZaralynChiselApp : Application() {
             "ZaralynChisel/logs"
         )
         Logger.init(logDir)
+        Logger.i("ZaralynChiselApp onCreate — v0.1.0-alpha, logDir=$logDir")
     }
 
     companion object {

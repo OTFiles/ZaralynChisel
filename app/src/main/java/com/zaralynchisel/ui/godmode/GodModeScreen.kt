@@ -60,13 +60,24 @@ fun GodModeScreen(
             val info = worldSelector.loadWorldInfo(worldPath)
             if (info != null) {
                 worldData = info
-                // TODO: Load actual chunk list from region files
-                chunks = listOf(
-                    ChunkInfo(0, 0, DimensionType.OVERWORLD, blockCount = 100),
-                    ChunkInfo(1, 0, DimensionType.OVERWORLD, blockCount = 100),
-                    ChunkInfo(0, 1, DimensionType.OVERWORLD, blockCount = 100),
-                    ChunkInfo(1, 1, DimensionType.OVERWORLD, blockCount = 100)
-                )
+                // Scan actual chunks from region files
+                val allChunks = mutableListOf<ChunkInfo>()
+                for (dim in info.dimensionPaths.keys) {
+                    val dimPath = info.dimensionPaths[dim] ?: continue
+                    Logger.i("Scanning chunks in $dim at $dimPath")
+                    val scanned = worldSelector.scanChunks(dimPath)
+                    allChunks.addAll(scanned)
+                }
+                chunks = allChunks.ifEmpty {
+                    // Fallback: at least show spawn area
+                    listOf(
+                        ChunkInfo(0, 0, DimensionType.OVERWORLD, blockCount = 0),
+                        ChunkInfo(1, 0, DimensionType.OVERWORLD, blockCount = 0),
+                        ChunkInfo(0, 1, DimensionType.OVERWORLD, blockCount = 0),
+                        ChunkInfo(1, 1, DimensionType.OVERWORLD, blockCount = 0)
+                    )
+                }
+                Logger.i("Loaded ${chunks.size} chunks total")
             } else {
                 errorMessage = "Failed to load world data"
             }
