@@ -180,44 +180,43 @@ class NbtReader(inputStream: InputStream) {
             dis.close()
         } catch (_: Exception) { }
     }
+}
 
-    /**
-     * Convenience: get an int value from a compound by key path.
-     */
-    fun NbtTag.NbtCompound.getInt(path: String, default: Int = 0): Int {
-        val tag = resolvePath(path) ?: return default
-        return (tag as? NbtTag.NbtInt)?.value ?: default
-    }
+// ── Top-level NbtTag extension functions ────────────────────────────
 
-    fun NbtTag.NbtCompound.getLong(path: String, default: Long = 0L): Long {
-        val tag = resolvePath(path) ?: return default
-        return (tag as? NbtTag.NbtLong)?.value ?: default
-    }
-
-    fun NbtTag.NbtCompound.getString(path: String, default: String = ""): String {
-        val tag = resolvePath(path) ?: return default
-        return (tag as? NbtTag.NbtString)?.value ?: default
-    }
-
-    fun NbtTag.NbtCompound.getCompound(path: String): NbtTag.NbtCompound? {
-        val tag = resolvePath(path) ?: return null
-        return tag as? NbtTag.NbtCompound
-    }
-
-    fun NbtTag.NbtCompound.getList(path: String): NbtTag.NbtList? {
-        val tag = resolvePath(path) ?: return null
-        return tag as? NbtTag.NbtList
-    }
-
-    private fun NbtTag.NbtCompound.resolvePath(path: String): NbtTag? {
-        val parts = path.split("/")
-        var current: NbtTag = this
-        for (part in parts) {
-            current = when (current) {
-                is NbtTag.NbtCompound -> current.value[part] ?: return null
-                else -> return null
-            }
+private fun NbtReader.NbtTag.NbtCompound.resolvePath(path: String): NbtReader.NbtTag? {
+    val parts = path.split("/")
+    var current: NbtReader.NbtTag = this
+    for (part in parts) {
+        current = when (current) {
+            is NbtReader.NbtTag.NbtCompound -> current.value[part] ?: return null
+            else -> return null
         }
-        return current
     }
+    return current
+}
+
+fun NbtReader.NbtTag.NbtCompound.getInt(path: String, default: Int = 0): Int {
+    val tag = resolvePath(path) ?: return default
+    return (tag as? NbtReader.NbtTag.NbtInt)?.value ?: default
+}
+
+fun NbtReader.NbtTag.NbtCompound.getLong(path: String, default: Long = 0L): Long {
+    val tag = resolvePath(path) ?: return default
+    return (tag as? NbtReader.NbtTag.NbtLong)?.value ?: default
+}
+
+fun NbtReader.NbtTag.NbtCompound.getString(path: String, default: String = ""): String {
+    val tag = resolvePath(path) ?: return default
+    return (tag as? NbtReader.NbtTag.NbtString)?.value ?: default
+}
+
+fun NbtReader.NbtTag.NbtCompound.getCompound(path: String): NbtReader.NbtTag.NbtCompound? {
+    val tag = resolvePath(path) ?: return null
+    return tag as? NbtReader.NbtTag.NbtCompound
+}
+
+fun NbtReader.NbtTag.NbtCompound.getList(path: String): NbtReader.NbtTag.NbtList? {
+    val tag = resolvePath(path) ?: return null
+    return tag as? NbtReader.NbtTag.NbtList
 }

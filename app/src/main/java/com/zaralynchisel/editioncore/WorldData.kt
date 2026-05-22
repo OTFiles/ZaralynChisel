@@ -28,8 +28,11 @@ enum class DimensionType(val folderName: String) {
     END("DIM1/region");
 
     companion object {
-        fun fromFolder(folder: String): DimensionType? =
-            entries.firstOrNull { folder.contains(it.folderName.removeSuffix("/region")) }
+        fun fromFolder(path: String): DimensionType? {
+            return entries.firstOrNull { dim ->
+                path.contains("/${dim.folderName}", ignoreCase = false)
+            }
+        }
     }
 }
 
