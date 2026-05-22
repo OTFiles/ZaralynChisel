@@ -15,13 +15,19 @@ class ZaralynChiselApp : Application() {
         instance = this
         preferenceManager = PreferenceManager(this)
 
-        // Initialize logger with external logs directory
-        val logDir = File(
-            android.os.Environment.getExternalStorageDirectory(),
-            "ZaralynChisel/logs"
-        )
+        // Initialize logger — try external storage, fall back to internal
+        val externalLogDir = try {
+            File(android.os.Environment.getExternalStorageDirectory(), "ZaralynChisel/logs")
+        } catch (e: Exception) {
+            null
+        }
+        val logDir = if (externalLogDir?.parentFile?.canWrite() == true) {
+            externalLogDir
+        } else {
+            File(filesDir, "logs")
+        }
         Logger.init(logDir)
-        Logger.i("ZaralynChiselApp onCreate — v0.1.0-alpha, logDir=$logDir")
+        Logger.i("ZaralynChiselApp.onCreate — v0.1.0-alpha, logDir=$logDir")
     }
 
     companion object {

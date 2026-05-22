@@ -53,6 +53,19 @@ fun GodModeScreen(
     var showGrid by remember { mutableStateOf(true) }
     var selection by remember { mutableStateOf<SelectionArea?>(null) }
 
+    // Batch operation state
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var isBatchRunning by remember { mutableStateOf(false) }
+    var clipboard by remember { mutableStateOf<ChunkClipboard?>(null) }
+    val batchProcessor = remember(worldPath) { BlockBatchProcessor(worldPath) }
+
+    // Current dimension info
+    val currentDim by remember(worldData) {
+        derivedStateOf {
+            worldData?.dimensionPaths?.keys?.firstOrNull() ?: DimensionType.OVERWORLD
+        }
+    }
+
     // Load world data
     LaunchedEffect(worldPath) {
         isLoading = true
@@ -132,22 +145,71 @@ fun GodModeScreen(
                     ToolbarButton(
                         icon = Icons.Default.Delete,
                         label = "删除",
-                        onClick = { /* TODO: Show delete dialog */ }
+                        enabled = selection != null && !isBatchRunning,
+                        onClick = { showDeleteDialog = true }
                     )
                     ToolbarButton(
                         icon = Icons.Default.ContentCopy,
                         label = "复制",
-                        onClick = { /* TODO: Copy selection */ }
+                        enabled = selection != null && !isBatchRunning,
+                        onClick = {
+                            if (selection != null) {
+                                scope.launch {
+                                    isBatchRunning = true
+                                    try {
+                                        clipboard = batchProcessor.copyChunks(currentDim, selection!!)
+                                        selection = null
+                                        Logger.i("Copied ${clipboard?.chunks?.size ?: 0} chunks to clipboard")
+                                    } finally {
+                                        isBatchRunning = false
+                                    }
+                                }
+                            }
+                        }
                     )
                     ToolbarButton(
                         icon = Icons.Default.ContentCut,
                         label = "剪切",
-                        onClick = { /* TODO: Cut selection */ }
+                        enabled = selection != null && !isBatchRunning,
+                        onClick = {
+                            if (selection != null) {
+                                scope.launch {
+                                    isBatchRunning = true
+                                    try {
+                                        clipboard = batchProcessor.copyChunks(currentDim, selection!!)
+                                        // Delete after copy
+                                        batchProcessor.deleteChunks(currentDim, selection!!).collect { }
+                                        selection = null
+                                        Logger.i("Cut ${clipboard?.chunks?.size ?: 0} chunks")
+                                    } finally {
+                                        isBatchRunning = false
+                                    }
+                                }
+                            }
+                        }
                     )
                     ToolbarButton(
                         icon = Icons.Default.ContentPaste,
                         label = "粘贴",
-                        onClick = { /* TODO: Paste */ }
+                        enabled = clipboard != null && !isBatchRunning,
+                        onClick = {
+                            clipboard?.let { clip ->
+                                scope.launch {
+                                    isBatchRunning = true
+                                    try {
+                                        val originX = chunks.minOfOrNull { it.x } ?: 0
+                                        val originZ = chunks.minOfOrNull { it.z } ?: 0
+                                        batchProcessor.pasteChunks(
+                                            currentDim, originX, originZ, clip
+                                        ).collect { }
+                                        clipboard = null
+                                        Logger.i("Pasted ${clip.chunks.size} chunks")
+                                    } finally {
+                                        isBatchRunning = false
+                                    }
+                                }
+                            }
+                        }
                     )
                     ToolbarButton(
                         icon = if (showGrid) Icons.Default.GridOn else Icons.Default.GridOff,
@@ -259,24 +321,61 @@ fun GodModeScreen(
             }
         }
     }
+
+    // ── Delete confirmation dialog ──────────────────────────────────
+    if (showDeleteDialog && selection != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null) },
+            title = { Text("确认删除") },
+            text = { Text("将删除选中区域内的所有区块数据。此操作不可撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteDialog = false
+                        scope.launch {
+                            isBatchRunning = true
+                            try {
+                                batchProcessor.deleteChunks(currentDim, selection!!)
+                                    .collect { /* progress */ }
+                                selection = null
+                            } finally {
+                                isBatchRunning = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun ToolbarButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    enabled: Boolean = true
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        IconButton(onClick = onClick) {
+        IconButton(onClick = onClick, enabled = enabled) {
             Icon(icon, contentDescription = label)
         }
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
         )
     }
 }

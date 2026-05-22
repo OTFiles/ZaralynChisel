@@ -50,7 +50,7 @@ fun HomeScreen(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = Icons.Default.Architecture,
+                        imageVector = Icons.Default.Build,
                         contentDescription = null,
                         modifier = Modifier.size(64.dp),
                         tint = MaterialTheme.colorScheme.onPrimaryContainer

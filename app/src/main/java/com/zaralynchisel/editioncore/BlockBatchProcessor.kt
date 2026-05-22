@@ -5,19 +5,18 @@ import com.zaralynchisel.utils.withBatch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.File
+import java.io.FileInputStream
+import java.io.ByteArrayInputStream
 
 /**
  * Handles batch operations on chunks and blocks.
- * Operations are processed in parallel batches with progress reporting.
+ * Uses NbtReader for all NBT parsing.
  */
 class BlockBatchProcessor(
     private val worldPath: String,
     private val batchSize: Int = 16
 ) {
 
-    /**
-     * Result of a batch operation.
-     */
     data class BatchResult(
         val successCount: Int,
         val failureCount: Int,
@@ -25,9 +24,6 @@ class BlockBatchProcessor(
         val errors: List<String> = emptyList()
     )
 
-    /**
-     * Progress update during batch processing.
-     */
     data class BatchProgress(
         val processed: Int,
         val total: Int,
@@ -35,35 +31,31 @@ class BlockBatchProcessor(
         val isComplete: Boolean = false
     )
 
-    /**
-     * Delete chunks in the given selection area.
-     * Returns a flow of progress updates.
-     */
     fun deleteChunks(
         dimension: DimensionType,
         selection: SelectionArea
     ): Flow<BatchProgress> = flow {
         val chunks = resolveChunks(dimension, selection)
         val total = chunks.size
-        emit(BatchProgress(0, total, "Preparing deletion..."))
+        emit(BatchProgress(0, total, "准备删除..."))
 
         val regionMap = groupChunksByRegion(chunks)
         var processed = 0
         val errors = mutableListOf<String>()
 
         for ((regionPos, localChunks) in regionMap) {
-            emit(BatchProgress(processed, total, "Processing region ${regionPos.fileName()}..."))
+            emit(BatchProgress(processed, total, "处理区域 ${regionPos.fileName()}..."))
 
             val regionFile = resolveRegionFile(dimension, regionPos)
             if (regionFile == null || !regionFile.exists()) {
-                errors.add("Region file not found: ${regionPos.fileName()}")
+                errors.add("区域文件不存在: ${regionPos.fileName()}")
                 processed += localChunks.size
                 continue
             }
 
             val writer = AnvilWriter(regionFile)
             if (!writer.open()) {
-                errors.add("Failed to open: ${regionPos.fileName()}")
+                errors.add("无法打开: ${regionPos.fileName()}")
                 processed += localChunks.size
                 continue
             }
@@ -71,22 +63,24 @@ class BlockBatchProcessor(
             for ((lx, lz) in localChunks) {
                 try {
                     writer.deleteChunk(lx, lz)
+                    Logger.d("Deleted chunk ($lx, $lz) in ${regionPos.fileName()}")
                 } catch (e: Exception) {
-                    errors.add("Failed to delete chunk ($lx, $lz) in ${regionPos.fileName()}: ${e.message}")
+                    errors.add("删除区块失败 ($lx, $lz): ${e.message}")
                 }
                 processed++
                 if (processed % batchSize == 0) {
-                    emit(BatchProgress(processed, total, "Deleting chunks..."))
+                    emit(BatchProgress(processed, total, "删除区块中..."))
                 }
             }
             writer.close()
         }
 
-        emit(BatchProgress(total, total, "Deletion complete", isComplete = true))
+        emit(BatchProgress(total, total, "删除完成 ($total 个区块)", isComplete = true))
     }
 
     /**
-     * Void area: replace all non-air blocks with air in the selection.
+     * Void area: replace all blocks in selection with air.
+     * Creates new empty chunk data for each chunk in the selection.
      */
     fun voidArea(
         dimension: DimensionType,
@@ -94,57 +88,151 @@ class BlockBatchProcessor(
     ): Flow<BatchProgress> = flow {
         val chunks = resolveChunks(dimension, selection)
         val total = chunks.size
-        emit(BatchProgress(0, total, "Preparing void operation..."))
+        emit(BatchProgress(0, total, "准备清空操作..."))
 
+        val regionMap = groupChunksByRegion(chunks)
         var processed = 0
         val errors = mutableListOf<String>()
 
-        for (chunk in chunks) {
-            emit(BatchProgress(processed, total, "Voiding chunk ($chunk)..."))
-            // TODO: Read chunk NBT, replace all non-air blocks, write back
-            processed++
+        for ((regionPos, localChunks) in regionMap) {
+            emit(BatchProgress(processed, total, "清空区域 ${regionPos.fileName()}..."))
+
+            val regionFile = resolveRegionFile(dimension, regionPos)
+            if (regionFile == null || !regionFile.exists()) {
+                errors.add("区域文件不存在: ${regionPos.fileName()}")
+                processed += localChunks.size
+                continue
+            }
+
+            val writer = AnvilWriter(regionFile)
+            if (!writer.open()) {
+                errors.add("无法打开: ${regionPos.fileName()}")
+                processed += localChunks.size
+                continue
+            }
+
+            for ((lx, lz) in localChunks) {
+                try {
+                    // Create minimal empty chunk NBT
+                    val emptyNbt = createEmptyChunkNbt()
+                    writer.writeChunk(lx, lz, emptyNbt)
+                } catch (e: Exception) {
+                    errors.add("清空区块失败 ($lx, $lz): ${e.message}")
+                }
+                processed++
+            }
+            writer.close()
         }
 
-        emit(BatchProgress(total, total, "Void operation complete", isComplete = true))
+        emit(BatchProgress(total, total, "清空完成", isComplete = true))
     }
 
-    /**
-     * Copy chunks from selection to clipboard.
-     */
     suspend fun copyChunks(
         dimension: DimensionType,
         selection: SelectionArea
     ): ChunkClipboard? {
         return withBatch {
-            Logger.d("Copying chunks in $dimension: $selection")
-            // TODO: Read chunk data and store in clipboard
-            null
+            val chunks = resolveChunks(dimension, selection)
+            if (chunks.isEmpty()) return@withBatch null
+
+            val regionMap = groupChunksByRegion(chunks)
+            val clipboardData = mutableListOf<Pair<ChunkPos, ByteArray>>()
+
+            for ((regionPos, localChunks) in regionMap) {
+                val regionFile = resolveRegionFile(dimension, regionPos) ?: continue
+                val reader = AnvilReader(regionFile)
+                if (!reader.open()) continue
+
+                for ((lx, lz) in localChunks) {
+                    val data = reader.readChunkData(lx, lz)
+                    if (data != null) {
+                        clipboardData.add(
+                            ChunkPos((regionPos.x shl 5) + lx, (regionPos.z shl 5) + lz) to data
+                        )
+                    }
+                }
+                reader.close()
+            }
+
+            if (clipboardData.isEmpty()) return@withBatch null
+
+            val minX = clipboardData.minOf { it.first.x }
+            val minZ = clipboardData.minOf { it.first.z }
+
+            ChunkClipboard(
+                chunks = clipboardData,
+                originChunkX = minX,
+                originChunkZ = minZ,
+                dimension = dimension
+            )
         }
     }
 
-    /**
-     * Paste chunks from clipboard at the given origin.
-     */
     suspend fun pasteChunks(
         dimension: DimensionType,
         originChunkX: Int,
         originChunkZ: Int,
         clipboard: ChunkClipboard
     ): Flow<BatchProgress> = flow {
-        emit(BatchProgress(0, clipboard.chunks.size, "Preparing paste..."))
-        // TODO: Write clipboard chunks to new positions
-        emit(BatchProgress(clipboard.chunks.size, clipboard.chunks.size, "Paste complete", isComplete = true))
+        val total = clipboard.chunks.size
+        emit(BatchProgress(0, total, "准备粘贴..."))
+
+        val offsetX = originChunkX - clipboard.originChunkX
+        val offsetZ = originChunkZ - clipboard.originChunkZ
+
+        val shiftedChunks = clipboard.chunks.map { (pos, data) ->
+            ChunkPos(pos.x + offsetX, pos.z + offsetZ) to data
+        }
+
+        val regionMap = mutableMapOf<RegionPos, MutableList<Triple<Int, Int, ByteArray>>>()
+        for ((pos, data) in shiftedChunks) {
+            val region = pos.toRegionPos()
+            val lx = pos.x and 31
+            val lz = pos.z and 31
+            regionMap.getOrPut(region) { mutableListOf() }.add(Triple(lx, lz, data))
+        }
+
+        var processed = 0
+        val errors = mutableListOf<String>()
+
+        for ((regionPos, entries) in regionMap) {
+            emit(BatchProgress(processed, total, "写入区域 ${regionPos.fileName()}..."))
+
+            val regionFile = resolveRegionFile(dimension, regionPos)
+            if (regionFile == null) {
+                errors.add("无法解析区域文件: ${regionPos.fileName()}")
+                processed += entries.size
+                continue
+            }
+
+            val writer = AnvilWriter(regionFile)
+            if (!writer.open()) {
+                errors.add("无法打开: ${regionPos.fileName()}")
+                processed += entries.size
+                continue
+            }
+
+            for ((lx, lz, data) in entries) {
+                try {
+                    writer.writeChunk(lx, lz, data)
+                } catch (e: Exception) {
+                    errors.add("粘贴失败 ($lx, $lz): ${e.message}")
+                }
+                processed++
+            }
+            writer.close()
+        }
+
+        emit(BatchProgress(total, total, "粘贴完成", isComplete = true))
     }
 
-    // ── Private helpers ────────────────────────────────────────────────
+    // ── Helpers ─────────────────────────────────────────────────────
 
     private fun resolveChunks(dimension: DimensionType, selection: SelectionArea): List<ChunkPos> {
         return when (selection) {
             is SelectionArea.Rectangle -> {
                 (selection.minChunkX..selection.maxChunkX).flatMap { x ->
-                    (selection.minChunkZ..selection.maxChunkZ).map { z ->
-                        ChunkPos(x, z)
-                    }
+                    (selection.minChunkZ..selection.maxChunkZ).map { z -> ChunkPos(x, z) }
                 }
             }
             is SelectionArea.Circle -> {
@@ -166,9 +254,7 @@ class BlockBatchProcessor(
         val map = mutableMapOf<RegionPos, MutableList<Pair<Int, Int>>>()
         for (chunk in chunks) {
             val region = chunk.toRegionPos()
-            val localX = chunk.x and 31
-            val localZ = chunk.z and 31
-            map.getOrPut(region) { mutableListOf() }.add(Pair(localX, localZ))
+            map.getOrPut(region) { mutableListOf() }.add(Pair(chunk.x and 31, chunk.z and 31))
         }
         return map
     }
@@ -177,11 +263,23 @@ class BlockBatchProcessor(
         val regionDir = File(worldPath, dimension.folderName)
         return File(regionDir, regionPos.fileName())
     }
+
+    companion object {
+        /**
+         * Create minimal empty chunk NBT data (Zlib compression type = 2).
+         * Format: [compression_type: 1 byte][NBT data...]
+         * NBT: TAG_Compound(""), TAG_End
+         */
+        fun createEmptyChunkNbt(): ByteArray {
+            return byteArrayOf(
+                2,  // Zlib compression type
+                0x0A, 0x00, 0x00,  // TAG_Compound("")
+                0x00   // TAG_End
+            )
+        }
+    }
 }
 
-/**
- * Clipboard data for cross-world chunk copy/paste.
- */
 data class ChunkClipboard(
     val chunks: List<Pair<ChunkPos, ByteArray>>,
     val originChunkX: Int,
