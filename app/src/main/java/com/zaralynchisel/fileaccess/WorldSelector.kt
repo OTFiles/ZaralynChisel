@@ -6,6 +6,7 @@ import com.zaralynchisel.editioncore.*
 import com.zaralynchisel.utils.Logger
 import com.zaralynchisel.utils.PreferenceManager
 import com.zaralynchisel.utils.withFileIO
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -59,8 +60,13 @@ class WorldSelector(private val context: Context) {
 
                 Logger.i("Reading level.dat from $worldPath")
 
-                val stream: InputStream? = safAccess?.openInputStream("level.dat", levelDat)
-                    ?: if (levelDat.exists()) FileInputStream(levelDat) else null
+                val stream: InputStream? = if (safAccess != null) {
+                    safAccess!!.openInputStream("level.dat", levelDat)
+                } else if (levelDat.exists()) {
+                    BufferedInputStream(FileInputStream(levelDat))
+                } else {
+                    null
+                }
 
                 if (stream == null) {
                     Logger.e("Cannot open level.dat at $worldPath")
@@ -143,8 +149,13 @@ class WorldSelector(private val context: Context) {
                     Logger.d("Scanning region: $fileName")
 
                     val regionFile = File(regionDir, fileName)
-                    val stream = safAccess?.openInputStream(relPath, regionFile)
-                        ?: if (regionFile.exists()) FileInputStream(regionFile) else null
+                    val stream = if (safAccess != null) {
+                        safAccess!!.openInputStream(relPath, regionFile)
+                    } else if (regionFile.exists()) {
+                        BufferedInputStream(FileInputStream(regionFile))
+                    } else {
+                        null
+                    }
 
                     if (stream == null) {
                         Logger.w("Cannot open region file: $fileName")

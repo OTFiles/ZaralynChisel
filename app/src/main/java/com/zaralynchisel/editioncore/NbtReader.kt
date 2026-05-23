@@ -1,6 +1,7 @@
 package com.zaralynchisel.editioncore
 
 import com.zaralynchisel.utils.Logger
+import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.InputStream
 import java.util.zip.GZIPInputStream
@@ -60,6 +61,8 @@ class NbtReader(inputStream: InputStream) {
     }
 
     init {
+        // Wrap in BufferedInputStream for mark/reset support
+        inputStream = if (input is BufferedInputStream) input else BufferedInputStream(input)
         // Detect compression: GZip or Zlib (deflate)
         val magicBytes = ByteArray(2)
         inputStream.mark(2)

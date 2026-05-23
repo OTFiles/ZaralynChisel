@@ -1,10 +1,15 @@
 package com.zaralynchisel.ui
 
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -59,6 +64,25 @@ object NavRoutes {
 @Composable
 fun ZaralynChiselNavHost() {
     val navController = rememberNavController()
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Storage permission launcher
+    val storagePermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        android.Manifest.permission.MANAGE_EXTERNAL_STORAGE
+    } else {
+        android.Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            navController.navigate(NavRoutes.FILE_PICKER)
+        } else {
+            // Still allow — SAF doesn't require storage permission
+            navController.navigate(NavRoutes.FILE_PICKER)
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -78,7 +102,21 @@ fun ZaralynChiselNavHost() {
     ) {
         composable(NavRoutes.HOME) {
             HomeScreen(
-                onOpenWorld = { navController.navigate(NavRoutes.FILE_PICKER) },
+                onOpenWorld = {
+                    // Check storage permission before opening file picker
+                    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        Environment.isExternalStorageManager()
+                    } else {
+                        androidx.core.content.ContextCompat.checkSelfPermission(
+                            context, android.Manifest.permission.READ_EXTERNAL_STORAGE
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    }
+                    if (hasPermission) {
+                        navController.navigate(NavRoutes.FILE_PICKER)
+                    } else {
+                        permissionLauncher.launch(storagePermission)
+                    }
+                },
                 onSettings = { navController.navigate(NavRoutes.SETTINGS) }
             )
         }
