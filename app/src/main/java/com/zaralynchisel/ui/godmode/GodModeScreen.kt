@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.zaralynchisel.editioncore.*
 import com.zaralynchisel.fileaccess.WorldSelector
+import com.zaralynchisel.fileaccess.WorldCache
 import com.zaralynchisel.renderengine.GodMapRenderer
 import com.zaralynchisel.ZaralynChiselApp
 import com.zaralynchisel.utils.Logger
@@ -53,7 +54,11 @@ fun GodModeScreen(
     var viewZ by remember { mutableFloatStateOf(0f) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var showGrid by remember { mutableStateOf(true) }
+    var isSelectMode by remember { mutableStateOf(false) }
     var selection by remember { mutableStateOf<SelectionArea?>(null) }
+    // Drag selection state
+    var selStartX by remember { mutableFloatStateOf(0f) }
+    var selStartZ by remember { mutableFloatStateOf(0f) }
 
     // Batch operation state
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -68,14 +73,23 @@ fun GodModeScreen(
         }
     }
 
-    // Load world data
+    // Load world data — use cache to avoid re-scanning
     LaunchedEffect(worldPath) {
         isLoading = true
         try {
+            // Try cache first
+            val cached = WorldCache.get(worldPath)
+            if (cached != null) {
+                worldData = cached.first
+                chunks = cached.second
+                Logger.i("Loaded ${chunks.size} chunks from cache")
+                isLoading = false
+                return@LaunchedEffect
+            }
+
             val info = worldSelector.loadWorldInfo(worldPath)
             if (info != null) {
                 worldData = info
-                // Scan actual chunks from region files
                 val allChunks = mutableListOf<ChunkInfo>()
                 for (dim in info.dimensionPaths.keys) {
                     val dimPath = info.dimensionPaths[dim] ?: continue
@@ -84,14 +98,15 @@ fun GodModeScreen(
                     allChunks.addAll(scanned)
                 }
                 chunks = allChunks.ifEmpty {
-                    // Fallback: at least show spawn area
                     listOf(
-                        ChunkInfo(0, 0, DimensionType.OVERWORLD, blockCount = 0),
-                        ChunkInfo(1, 0, DimensionType.OVERWORLD, blockCount = 0),
-                        ChunkInfo(0, 1, DimensionType.OVERWORLD, blockCount = 0),
-                        ChunkInfo(1, 1, DimensionType.OVERWORLD, blockCount = 0)
+                        ChunkInfo(0, 0, DimensionType.OVERWORLD),
+                        ChunkInfo(1, 0, DimensionType.OVERWORLD),
+                        ChunkInfo(0, 1, DimensionType.OVERWORLD),
+                        ChunkInfo(1, 1, DimensionType.OVERWORLD)
                     )
                 }
+                // Cache the result
+                WorldCache.put(worldPath, info, chunks)
                 Logger.i("Loaded ${chunks.size} chunks total")
             } else {
                 errorMessage = "Failed to load world data"
@@ -214,6 +229,14 @@ fun GodModeScreen(
                         }
                     )
                     ToolbarButton(
+                        icon = if (isSelectMode) Icons.Default.SelectAll else Icons.Default.TouchApp,
+                        label = "选择",
+                        onClick = {
+                            isSelectMode = !isSelectMode
+                            if (!isSelectMode) selection = null
+                        }
+                    )
+                    ToolbarButton(
                         icon = if (showGrid) Icons.Default.GridOn else Icons.Default.GridOff,
                         label = "网格",
                         onClick = { showGrid = !showGrid }
@@ -257,11 +280,24 @@ fun GodModeScreen(
                     Canvas(
                         modifier = Modifier
                             .fillMaxSize()
-                            .pointerInput(Unit) {
-                                detectTransformGestures { _, pan, zoomChange, _ ->
-                                    viewX -= pan.x / (16f * zoom)
-                                    viewZ -= pan.y / (16f * zoom)
-                                    zoom = (zoom * zoomChange).coerceIn(0.1f, 10f)
+                            .pointerInput(isSelectMode) {
+                                if (isSelectMode) {
+                                    detectDragGestures(
+                                        onDragStart = { pos ->
+                                            val scaled = 16f * zoom
+                                            selStartX = (pos.x / scaled).toInt().toFloat()
+                                            selStartZ = (pos.y / scaled).toInt().toFloat()
+                                        },
+                                        onDragEnd = { }
+                                    ) { change, _ ->
+                                        change.consume()
+                                    }
+                                } else {
+                                    detectTransformGestures { _, pan, zoomChange, _ ->
+                                        viewX -= pan.x / (16f * zoom)
+                                        viewZ -= pan.y / (16f * zoom)
+                                        zoom = (zoom * zoomChange).coerceIn(0.1f, 10f)
+                                    }
                                 }
                             }
                     ) {

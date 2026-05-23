@@ -83,7 +83,10 @@ class WorldSelector(private val context: Context) {
                 val worldName = data.getString("LevelName", dir.name)
                 val dataVersion = data.getInt("DataVersion", 0)
                 val versionName = data.getCompound("Version")?.getString("Name", "unknown") ?: "unknown"
-                val seed = data.getLong("RandomSeed", 0L)
+                // 1.19+ (dataVersion>=3120): seed is in Data/WorldGenSettings/seed
+                // Older versions: Data/RandomSeed
+                val seed = data.getCompound("WorldGenSettings")?.getLong("seed")
+                    ?: data.getLong("RandomSeed", 0L)
                 val spawnX = data.getInt("SpawnX", 0)
                 val spawnZ = data.getInt("SpawnZ", 0)
                 val lastPlayed = data.getLong("LastPlayed", 0L)

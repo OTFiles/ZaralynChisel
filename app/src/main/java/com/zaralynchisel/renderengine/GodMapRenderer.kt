@@ -47,7 +47,6 @@ class GodMapRenderer {
     }
 
     private val chunkPresentPaint = Paint().apply {
-        color = 0xCC888888.toInt()
         style = Paint.Style.FILL
     }
 
@@ -102,7 +101,7 @@ class GodMapRenderer {
             if (chunk.isEmpty) {
                 canvas.drawRect(rect, chunkEmptyPaint)
             } else {
-                // TODO: Color by biome or heightmap
+                chunkPresentPaint.color = chunkColor(chunk.x, chunk.z, chunk.dimension)
                 canvas.drawRect(rect, chunkPresentPaint)
             }
         }
@@ -178,5 +177,21 @@ class GodMapRenderer {
         val chunkX = ((screenX - offsetX) / scaledChunkSize).toInt()
         val chunkZ = ((screenZ - offsetZ) / scaledChunkSize).toInt()
         return Pair(chunkX, chunkZ)
+    }
+
+    /**
+     * Deterministic pseudo-random color based on chunk position and dimension.
+     */
+    private fun chunkColor(x: Int, z: Int, dimension: com.zaralynchisel.editioncore.DimensionType): Int {
+        val dimOffset = when (dimension) {
+            com.zaralynchisel.editioncore.DimensionType.OVERWORLD -> 0
+            com.zaralynchisel.editioncore.DimensionType.NETHER -> 0x55555555
+            com.zaralynchisel.editioncore.DimensionType.END -> 0x33333333
+        }
+        val h = ((x.toLong() * 0x9E3779B9L) xor (z.toLong() * 0x517CC1B7L) + dimOffset).toInt()
+        val r = ((h shr 16) and 0xFF) % 96 + 80
+        val g = ((h shr 8) and 0xFF) % 96 + 64
+        val b = (h and 0xFF) % 80 + 48
+        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
     }
 }
