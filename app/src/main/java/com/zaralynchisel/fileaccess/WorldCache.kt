@@ -13,8 +13,10 @@ object WorldCache {
     private var cachedWorldPath: String? = null
 
     fun get(worldPath: String): Pair<WorldData, List<ChunkInfo>>? {
-        if (cachedWorldPath == worldPath && cachedWorld != null && cachedChunks != null) {
-            return cachedWorld to cachedChunks!!
+        val world = cachedWorld
+        val chunks = cachedChunks
+        if (cachedWorldPath == worldPath && world != null && chunks != null) {
+            return Pair(world, chunks)
         }
         return null
     }
