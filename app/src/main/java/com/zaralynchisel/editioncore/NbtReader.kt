@@ -13,8 +13,9 @@ import java.util.zip.InflaterInputStream
  *
  * NBT specification: https://wiki.vg/NBT
  */
-class NbtReader(inputStream: InputStream) {
+class NbtReader(input: InputStream) {
 
+    private val inputStream: InputStream
     private val dis: DataInputStream
 
     /**
