@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.zaralynchisel.editioncore.*
 import com.zaralynchisel.fileaccess.WorldSelector
 import com.zaralynchisel.renderengine.GodMapRenderer
+import com.zaralynchisel.ZaralynChiselApp
 import com.zaralynchisel.utils.Logger
 import kotlinx.coroutines.launch
 
@@ -38,7 +39,8 @@ fun GodModeScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val worldSelector = remember { WorldSelector(context) }
+    val app = context.applicationContext as ZaralynChiselApp
+    val worldSelector = remember { WorldSelector(context).also { it.safAccess = app.safAccess } }
     val renderer = remember { GodMapRenderer() }
 
     var worldData by remember { mutableStateOf<WorldData?>(null) }

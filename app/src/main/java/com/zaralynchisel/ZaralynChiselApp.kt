@@ -1,6 +1,7 @@
 package com.zaralynchisel
 
 import android.app.Application
+import com.zaralynchisel.fileaccess.SafFileAccess
 import com.zaralynchisel.utils.Logger
 import com.zaralynchisel.utils.PreferenceManager
 import java.io.File
@@ -9,6 +10,7 @@ class ZaralynChiselApp : Application() {
 
     lateinit var preferenceManager: PreferenceManager
         private set
+    val safAccess: SafFileAccess by lazy { SafFileAccess(this) }
 
     override fun onCreate() {
         super.onCreate()

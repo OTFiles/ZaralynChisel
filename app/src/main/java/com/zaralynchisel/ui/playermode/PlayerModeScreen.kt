@@ -1,20 +1,29 @@
 package com.zaralynchisel.ui.playermode
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 
 import android.opengl.GLSurfaceView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.zaralynchisel.renderengine.PlayerRenderer
 import com.zaralynchisel.utils.Logger
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -22,11 +31,15 @@ fun PlayerModeScreen(
     worldPath: String,
     onBack: () -> Unit
 ) {
-    val context = LocalContext.current
-    var textureAvailable by remember { mutableStateOf(true) }  // TODO: Check actual texture availability
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+    val hasKeyboard = configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY
+
+    var textureAvailable by remember { mutableStateOf(true) }
     var showHud by remember { mutableStateOf(true) }
     var collisionEnabled by remember { mutableStateOf(true) }
     var showChunkGrid by remember { mutableStateOf(false) }
+    var showWASD by remember { mutableStateOf(true) }
 
     // Player state
     var posX by remember { mutableFloatStateOf(0f) }
@@ -35,8 +48,35 @@ fun PlayerModeScreen(
     var yaw by remember { mutableFloatStateOf(0f) }
     var pitch by remember { mutableFloatStateOf(0f) }
 
+    // Continuous movement via WASD (held down = repeated move)
+    var moveForward by remember { mutableStateOf(false) }
+    var moveBack by remember { mutableStateOf(false) }
+    var moveLeft by remember { mutableStateOf(false) }
+    var moveRight by remember { mutableStateOf(false) }
+    var moveUp by remember { mutableStateOf(false) }
+    var moveDown by remember { mutableStateOf(false) }
+
+    // Continuous movement coroutine
+    LaunchedEffect(moveForward, moveBack, moveLeft, moveRight, moveUp, moveDown) {
+        val moveSpeed = 0.3f
+        while (isActive) {
+            if (moveForward || moveBack || moveLeft || moveRight || moveUp || moveDown) {
+                val radYaw = Math.toRadians(yaw.toDouble())
+                val sinYaw = kotlin.math.sin(radYaw).toFloat()
+                val cosYaw = kotlin.math.cos(radYaw).toFloat()
+
+                if (moveForward) { posX -= sinYaw * moveSpeed; posZ += cosYaw * moveSpeed }
+                if (moveBack) { posX += sinYaw * moveSpeed; posZ -= cosYaw * moveSpeed }
+                if (moveLeft) { posX -= cosYaw * moveSpeed; posZ -= sinYaw * moveSpeed }
+                if (moveRight) { posX += cosYaw * moveSpeed; posZ += sinYaw * moveSpeed }
+                if (moveUp) posY += moveSpeed
+                if (moveDown) posY -= moveSpeed
+            }
+            delay(16L) // ~60 FPS
+        }
+    }
+
     if (!textureAvailable) {
-        // Textures missing — force downgrade to God Mode
         Column(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -50,7 +90,7 @@ fun PlayerModeScreen(
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Textures Not Available",
+                text = "纹理不可用",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
@@ -70,60 +110,108 @@ fun PlayerModeScreen(
 
     Scaffold(
         topBar = {
+            // Compact top bar
             TopAppBar(
-                title = { Text("Player 模式") },
+                title = {
+                    Text("Player 模式", fontSize = 16.sp)
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回",
+                             modifier = Modifier.size(20.dp))
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showHud = !showHud }) {
+                    // Keyboard indicator
+                    if (hasKeyboard) {
+                        Icon(
+                            Icons.Default.Keyboard,
+                            contentDescription = "键盘已连接",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    IconButton(
+                        onClick = { showHud = !showHud },
+                        modifier = Modifier.size(40.dp)
+                    ) {
                         Icon(
                             if (showHud) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                            contentDescription = "切换 HUD"
+                            contentDescription = "切换 HUD",
+                            modifier = Modifier.size(20.dp)
                         )
                     }
-                }
+                    IconButton(
+                        onClick = { showWASD = !showWASD },
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Gamepad,
+                            contentDescription = "切换触屏控件",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                },
+                modifier = Modifier.height(44.dp)
             )
         },
         bottomBar = {
+            // Compact bottom bar
             BottomAppBar(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                modifier = Modifier.height(44.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 0.dp
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = { /* TODO: Pick block */ }) {
-                        Icon(Icons.Default.Colorize, contentDescription = "选取方块")
+                    IconButton(
+                        onClick = { /* TODO: Pick block */ },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(Icons.Default.Colorize, contentDescription = "选取方块",
+                             modifier = Modifier.size(18.dp))
                     }
-                    IconButton(onClick = { /* TODO: Open inventory */ }) {
-                        Icon(Icons.Default.Inventory2, contentDescription = "背包")
+                    IconButton(
+                        onClick = { /* TODO: Open inventory */ },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(Icons.Default.Inventory2, contentDescription = "背包",
+                             modifier = Modifier.size(18.dp))
                     }
-                    IconButton(onClick = { collisionEnabled = !collisionEnabled }) {
+                    IconButton(
+                        onClick = { collisionEnabled = !collisionEnabled },
+                        modifier = Modifier.size(36.dp)
+                    ) {
                         Icon(
                             if (collisionEnabled) Icons.Default.DirectionsWalk else Icons.Default.Flight,
-                            contentDescription = "切换碰撞"
+                            contentDescription = "切换碰撞",
+                            modifier = Modifier.size(18.dp)
                         )
                     }
-                    IconButton(onClick = { showChunkGrid = !showChunkGrid }) {
+                    IconButton(
+                        onClick = { showChunkGrid = !showChunkGrid },
+                        modifier = Modifier.size(36.dp)
+                    ) {
                         Icon(
                             if (showChunkGrid) Icons.Default.GridOn else Icons.Default.GridOff,
-                            contentDescription = "区块网格"
+                            contentDescription = "区块网格",
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
             }
         }
     ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             // OpenGL view with touch gesture handling
             AndroidView(
                 factory = { ctx ->
@@ -131,28 +219,36 @@ fun PlayerModeScreen(
                         setEGLContextClientVersion(3)
                         val renderer = PlayerRenderer()
                         renderer.viewConfig.showChunkGrid = showChunkGrid
+                        renderer.updateCamera(posX, posY, posZ, yaw, pitch)
                         setRenderer(renderer)
                         renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-                        tag = renderer  // Store for update lambda
+                        tag = renderer
 
-                        // Touch gesture: drag to rotate camera
                         var lastX = 0f
                         var lastY = 0f
+                        var isMultiTouch = false
                         setOnTouchListener { _, event ->
-                            when (event.action) {
+                            when (event.actionMasked) {
                                 android.view.MotionEvent.ACTION_DOWN -> {
                                     lastX = event.x
                                     lastY = event.y
+                                    isMultiTouch = false
+                                    true
+                                }
+                                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
+                                    isMultiTouch = true
                                     true
                                 }
                                 android.view.MotionEvent.ACTION_MOVE -> {
-                                    val dx = event.x - lastX
-                                    val dy = event.y - lastY
-                                    yaw = (yaw + dx * 0.15f) % 360f
-                                    pitch = (pitch - dy * 0.15f).coerceIn(-89f, 89f)
-                                    renderer.updateCamera(posX, posY, posZ, yaw, pitch)
-                                    lastX = event.x
-                                    lastY = event.y
+                                    if (!isMultiTouch && event.pointerCount == 1) {
+                                        val dx = event.x - lastX
+                                        val dy = event.y - lastY
+                                        yaw = (yaw + dx * 0.15f) % 360f
+                                        pitch = (pitch - dy * 0.15f).coerceIn(-89f, 89f)
+                                        renderer.updateCamera(posX, posY, posZ, yaw, pitch)
+                                        lastX = event.x
+                                        lastY = event.y
+                                    }
                                     true
                                 }
                                 else -> false
@@ -163,12 +259,46 @@ fun PlayerModeScreen(
                 update = { glView ->
                     (glView.tag as? PlayerRenderer)?.let { r ->
                         r.viewConfig.showChunkGrid = showChunkGrid
+                        r.updateCamera(posX, posY, posZ, yaw, pitch)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
 
-            // HUD overlay
+            // ── WASD Touch Controls ──────────────────────────────────
+            if (showWASD) {
+                // Left side — D-Pad (WASD)
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 24.dp, bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // W / Forward
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        WasdButton("W", pressed = moveForward) { moveForward = it }
+                    }
+                    // A S D
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        WasdButton("A", pressed = moveLeft) { moveLeft = it }
+                        WasdButton("S", pressed = moveBack) { moveBack = it }
+                        WasdButton("D", pressed = moveRight) { moveRight = it }
+                    }
+                }
+
+                // Right side — Jump / Crouch
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 24.dp, bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    WasdButton("↑", pressed = moveUp, size = 44.dp) { moveUp = it }
+                    WasdButton("↓", pressed = moveDown, size = 44.dp) { moveDown = it }
+                }
+            }
+
+            // ── HUD Overlay ───────────────────────────────────────────
             if (showHud) {
                 Surface(
                     modifier = Modifier
@@ -183,7 +313,7 @@ fun PlayerModeScreen(
                             style = MaterialTheme.typography.labelSmall
                         )
                         Text(
-                            text = "偏航: ${"%.1f".format(yaw)}° 俯仰: ${"%.1f".format(pitch)}°",
+                            text = "偏航: ${"%.1f".format(yaw)}°",
                             style = MaterialTheme.typography.labelSmall
                         )
                         Text(
@@ -194,14 +324,64 @@ fun PlayerModeScreen(
                 }
 
                 // Crosshair
-                Surface(
-                    modifier = Modifier.align(Alignment.Center),
-                    shape = MaterialTheme.shapes.extraSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                ) {
-                    Box(modifier = Modifier.size(4.dp))
-                }
+                Box(
+                    modifier = Modifier.align(Alignment.Center).size(4.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.6f))
+                )
             }
+        }
+    }
+}
+
+/**
+ * Touch button for WASD movement.
+ * Supports press-and-hold continuous movement.
+ */
+@Composable
+private fun WasdButton(
+    label: String,
+    pressed: Boolean,
+    size: androidx.compose.ui.unit.Dp = 40.dp,
+    onPress: (Boolean) -> Unit
+) {
+    Surface(
+        modifier = Modifier.size(size),
+        shape = CircleShape,
+        color = if (pressed) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+        tonalElevation = if (pressed) 2.dp else 0.dp
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            when (event.type) {
+                                android.view.MotionEvent.ACTION_DOWN,
+                                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
+                                    onPress(true)
+                                }
+                                android.view.MotionEvent.ACTION_UP,
+                                android.view.MotionEvent.ACTION_POINTER_UP,
+                                android.view.MotionEvent.ACTION_CANCEL -> {
+                                    onPress(false)
+                                }
+                            }
+                        }
+                    }
+                }
+        ) {
+            Text(
+                text = label,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (pressed) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurface
+            )
         }
     }
 }

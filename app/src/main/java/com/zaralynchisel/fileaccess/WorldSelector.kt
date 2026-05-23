@@ -8,6 +8,7 @@ import com.zaralynchisel.utils.PreferenceManager
 import com.zaralynchisel.utils.withFileIO
 import java.io.File
 import java.io.FileInputStream
+import java.io.InputStream
 
 /**
  * Handles world selection and validation.
@@ -16,6 +17,7 @@ import java.io.FileInputStream
 class WorldSelector(private val context: Context) {
 
     private val prefs = PreferenceManager(context)
+    var safAccess: SafFileAccess? = null
 
     /**
      * Validate that a given path is a valid Minecraft world.
@@ -29,12 +31,14 @@ class WorldSelector(private val context: Context) {
                 return@withFileIO ValidationResult.Invalid("路径不存在或不是文件夹")
             }
             val levelDat = File(dir, "level.dat")
-            if (!levelDat.exists()) {
+            val levelDatExists = safAccess?.exists("level.dat", levelDat) ?: levelDat.exists()
+            if (!levelDatExists) {
                 Logger.w("No level.dat found at $worldPath")
                 return@withFileIO ValidationResult.Invalid("未找到 level.dat — 不是 Minecraft 存档")
             }
             val hasRegion = DimensionType.entries.any { dim ->
-                File(dir, dim.folderName).exists()
+                val dimDir = File(dir, dim.folderName)
+                dimDir.exists() || (safAccess?.exists(dim.folderName, dimDir) == true)
             }
             if (!hasRegion) {
                 return@withFileIO ValidationResult.Invalid("未找到区域文件 — 存档可能为空或已损坏")
@@ -52,13 +56,18 @@ class WorldSelector(private val context: Context) {
             try {
                 val dir = File(worldPath)
                 val levelDat = File(dir, "level.dat")
-                if (!levelDat.exists()) return@withFileIO null
 
                 Logger.i("Reading level.dat from $worldPath")
 
-                val reader = FileInputStream(levelDat).use { stream ->
-                    NbtReader(stream)
+                val stream: InputStream? = safAccess?.openInputStream("level.dat", levelDat)
+                    ?: if (levelDat.exists()) FileInputStream(levelDat) else null
+
+                if (stream == null) {
+                    Logger.e("Cannot open level.dat at $worldPath")
+                    return@withFileIO null
                 }
+
+                val reader = stream.use { NbtReader(it) }
                 val (_, rootCompound) = reader.readRoot()
                 val data = rootCompound.getCompound("Data")
                     ?: rootCompound
@@ -74,7 +83,9 @@ class WorldSelector(private val context: Context) {
                 val dimensions = mutableMapOf<DimensionType, String>()
                 for (dim in DimensionType.entries) {
                     val regionDir = File(dir, dim.folderName)
-                    if (regionDir.exists()) {
+                    val hasRegions = regionDir.exists() ||
+                        (safAccess?.exists(dim.folderName, regionDir) == true)
+                    if (hasRegions) {
                         dimensions[dim] = regionDir.absolutePath
                     }
                 }
@@ -107,24 +118,40 @@ class WorldSelector(private val context: Context) {
             val chunks = mutableListOf<ChunkInfo>()
             try {
                 val regionDir = File(dimensionPath)
-                if (!regionDir.exists()) {
-                    Logger.w("Region directory not found: $dimensionPath")
-                    return@withFileIO chunks
-                }
-                val regionFiles = regionDir.listFiles { f ->
-                    f.name.matches(RegionFileNameRegex)
-                } ?: return@withFileIO chunks
-
                 val dim = DimensionType.fromFolder(dimensionPath) ?: DimensionType.OVERWORLD
 
-                for (regionFile in regionFiles) {
-                    val match = REGION_FILE_REGEX.find(regionFile.name) ?: continue
+                // Try SAF listing first, fall back to direct file
+                val regionFiles: List<Pair<String, String>> = if (safAccess?.isAvailable == true) {
+                    safAccess!!.listChildren(dim.folderName, regionDir).filter {
+                        it.second.matches(RegionFileNameRegex)
+                    }
+                } else {
+                    regionDir.listFiles { f -> f.name.matches(RegionFileNameRegex) }
+                        ?.map { it.name to it.name } ?: emptyList()
+                }
+
+                if (regionFiles.isEmpty()) {
+                    Logger.w("No region files found in $dimensionPath")
+                    return@withFileIO chunks
+                }
+
+                for ((relPath, fileName) in regionFiles) {
+                    val match = REGION_FILE_REGEX.find(fileName) ?: continue
                     val rx = match.groupValues[1].toInt()
                     val rz = match.groupValues[2].toInt()
 
-                    Logger.d("Scanning region: ${regionFile.name}")
+                    Logger.d("Scanning region: $fileName")
 
-                    val reader = AnvilReader(regionFile)
+                    val regionFile = File(regionDir, fileName)
+                    val stream = safAccess?.openInputStream(relPath, regionFile)
+                        ?: if (regionFile.exists()) FileInputStream(regionFile) else null
+
+                    if (stream == null) {
+                        Logger.w("Cannot open region file: $fileName")
+                        continue
+                    }
+
+                    val reader = AnvilReader.fromStream(stream)
                     if (reader.open()) {
                         try {
                             for (lx in 0 until 32) {
@@ -144,7 +171,7 @@ class WorldSelector(private val context: Context) {
                             reader.close()
                         }
                     } else {
-                        Logger.w("Failed to open region file: ${regionFile.name}")
+                        Logger.w("Failed to open region file: $fileName")
                     }
                 }
                 Logger.i("Scanned ${chunks.size} chunks in dimension $dim")
@@ -200,7 +227,6 @@ class WorldSelector(private val context: Context) {
         private val RegionFileNameRegex = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
         private val REGION_FILE_REGEX = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
 
-        // Wrap DocumentsContract for testability on non-Android platforms
         private val documentsContractCompat = object {
             fun getTreeDocumentId(uri: Uri): String =
                 android.provider.DocumentsContract.getTreeDocumentId(uri)

@@ -2,19 +2,34 @@ package com.zaralynchisel.editioncore
 
 import com.zaralynchisel.utils.Logger
 import java.io.File
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 
 /**
  * Reads Minecraft Anvil (.mca) region files.
- * Uses Hephaistos under the hood for NBT parsing.
- *
- * This is a high-level wrapper that provides chunk-level access
- * to region files. Actual NBT serialization is delegated to Hephaistos.
  */
 class AnvilReader(private val regionFile: File) {
 
     private var raf: RandomAccessFile? = null
+    private var tempFile: File? = null
+
+    companion object {
+        /**
+         * Create an AnvilReader from an InputStream (e.g. from SAF ContentResolver).
+         * Buffers the entire stream to a temp file for random access.
+         */
+        fun fromStream(stream: InputStream): AnvilReader {
+            val tempFile = File.createTempFile("region_", ".mca")
+            tempFile.deleteOnExit()
+            tempFile.outputStream().use { out ->
+                stream.copyTo(out)
+            }
+            val reader = AnvilReader(tempFile)
+            reader.tempFile = tempFile
+            return reader
+        }
+    }
 
     /**
      * Open the region file for reading.

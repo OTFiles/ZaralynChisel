@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.zaralynchisel.fileaccess.WorldSelector
+import com.zaralynchisel.fileaccess.SafFileAccess
 import com.zaralynchisel.utils.Logger
 import kotlinx.coroutines.launch
 import java.io.File
@@ -35,6 +36,7 @@ fun FilePickerScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val worldSelector = remember { WorldSelector(context) }
+    val safAccess = remember { SafFileAccess(context) }
 
     var recentWorlds by remember { mutableStateOf(worldSelector.getRecentWorlds()) }
     var isLoading by remember { mutableStateOf(false) }
@@ -66,6 +68,8 @@ fun FilePickerScreen(
                     context.contentResolver.takePersistableUriPermission(
                         uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     )
+                    safAccess.setTreeUri(uri)
+                    worldSelector.safAccess = safAccess
                     val resolvedPath = worldSelector.resolveSafUri(uri)
                     if (resolvedPath != null) {
                         val validation = worldSelector.validateWorld(resolvedPath)
