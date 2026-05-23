@@ -361,15 +361,9 @@ private fun WasdButton(
                         while (true) {
                             val event = awaitPointerEvent()
                             when (event.type) {
-                                android.view.MotionEvent.ACTION_DOWN,
-                                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
-                                    onPress(true)
-                                }
-                                android.view.MotionEvent.ACTION_UP,
-                                android.view.MotionEvent.ACTION_POINTER_UP,
-                                android.view.MotionEvent.ACTION_CANCEL -> {
-                                    onPress(false)
-                                }
+                                androidx.compose.ui.input.pointer.PointerEventType.Press -> onPress(true)
+                                androidx.compose.ui.input.pointer.PointerEventType.Release -> onPress(false)
+                                else -> {}
                             }
                         }
                     }
