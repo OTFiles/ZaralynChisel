@@ -1,6 +1,7 @@
 package com.zaralynchisel.editioncore
 
 import com.zaralynchisel.utils.Logger
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.InputStream
 import java.io.RandomAccessFile
@@ -28,6 +29,21 @@ class AnvilReader(private val regionFile: File) {
             val reader = AnvilReader(tempFile)
             reader.tempFile = tempFile
             return reader
+        }
+
+        private fun decodeHeightmap(longs: LongArray, bitsPerEntry: Int, entryCount: Int): IntArray {
+            val result = IntArray(entryCount)
+            for (i in result.indices) {
+                val bitOffset = i * bitsPerEntry
+                val longIndex = bitOffset / 64
+                val bitInLong = bitOffset % 64
+                var value = longs[longIndex] ushr bitInLong
+                if (bitInLong + bitsPerEntry > 64 && longIndex + 1 < longs.size) {
+                    value = value or (longs[longIndex + 1] shl (64 - bitInLong))
+                }
+                result[i] = (value and ((1L shl bitsPerEntry) - 1)).toInt()
+            }
+            return result
         }
     }
 
@@ -114,6 +130,32 @@ class AnvilReader(private val regionFile: File) {
             data
         } catch (e: Exception) {
             Logger.e("Failed to read chunk data at ($localX, $localZ)", e)
+            null
+        }
+    }
+
+    /**
+     * Read the heightmap (MOTION_BLOCKING) from chunk data.
+     * This is much faster than parsing all block states.
+     * Returns 256-entry height array (16×16 in row-major: z*16+x).
+     */
+    fun readChunkHeightmap(localX: Int, localZ: Int): IntArray? {
+        val data = readChunkData(localX, localZ) ?: return null
+        return try {
+            val reader = NbtReader(ByteArrayInputStream(data))
+            val (_, root) = reader.readRoot()
+            reader.close()
+
+            val heightmaps = root.getCompound("Heightmaps") ?: return null
+            val motionBlocking = heightmaps.getList("MOTION_BLOCKING") ?: return null
+            val longs = motionBlocking.value
+                .filterIsInstance<NbtReader.NbtTag.NbtLong>()
+                .map { it.value }
+                .toLongArray()
+
+            decodeHeightmap(longs, 9, 256)
+        } catch (e: Exception) {
+            Logger.e("Failed to read heightmap for ($localX, $localZ)", e)
             null
         }
     }

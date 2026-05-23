@@ -101,7 +101,7 @@ class GodMapRenderer {
             if (chunk.isEmpty) {
                 canvas.drawRect(rect, chunkEmptyPaint)
             } else {
-                chunkPresentPaint.color = chunkColor(chunk.x, chunk.z, chunk.dimension)
+                chunkPresentPaint.color = terrainColor(chunk.x, chunk.z, chunk.averageHeight, chunk.dimension)
                 canvas.drawRect(rect, chunkPresentPaint)
             }
         }
@@ -180,18 +180,63 @@ class GodMapRenderer {
     }
 
     /**
-     * Deterministic pseudo-random color based on chunk position and dimension.
+     * Terrain-simulated color based on chunk coordinates and dimension.
+     * Uses value noise to produce terrain-like coloring:
+     * - Low areas: green (grass)
+     * - Mid elevations: brown (dirt/hills)
+     * - High elevations: gray (stone/mountains)
+     * - Very high: white (snow)
      */
-    private fun chunkColor(x: Int, z: Int, dimension: com.zaralynchisel.editioncore.DimensionType): Int {
-        val dimOffset = when (dimension) {
-            com.zaralynchisel.editioncore.DimensionType.OVERWORLD -> 0
-            com.zaralynchisel.editioncore.DimensionType.NETHER -> 0x55555555
-            com.zaralynchisel.editioncore.DimensionType.END -> 0x33333333
+    private fun terrainColor(x: Int, z: Int, height: Int, dimension: com.zaralynchisel.editioncore.DimensionType): Int {
+        // Use actual height if available
+        val h = if (height > 0) {
+            height.toFloat()
+        } else {
+            // Simulated height from value noise
+            simulatedHeight(x, z, dimension)
         }
-        val h = ((x.toLong() * 0x9E3779B9L) xor (z.toLong() * 0x517CC1B7L) + dimOffset).toInt()
-        val r = ((h shr 16) and 0xFF) % 96 + 80
-        val g = ((h shr 8) and 0xFF) % 96 + 64
-        val b = (h and 0xFF) % 80 + 48
-        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+
+        return when {
+            dimension == com.zaralynchisel.editioncore.DimensionType.NETHER -> {
+                // Nether: dark red tones
+                val v = ((simulatedHeight(x, z, dimension) % 40 + 40) / 40f).coerceIn(0f, 1f)
+                val r = (140 + v * 60).toInt()
+                val g = (30 + v * 20).toInt()
+                val b = (30 + v * 10).toInt()
+                (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
+            dimension == com.zaralynchisel.editioncore.DimensionType.END -> {
+                // End: pale yellow
+                0xFFD4C898.toInt()
+            }
+            h < 55 -> 0xFF3E7A28.toInt()  // deep green
+            h < 63 -> 0xFF5C9E3A.toInt()  // grass green
+            h < 68 -> 0xFF7FB238.toInt()  // light grass
+            h < 75 -> 0xFF8B7355.toInt()  // brown / dirt
+            h < 90 -> 0xFF9D9D9D.toInt()  // stone gray
+            h < 110 -> 0xFFB0B0B0.toInt() // light stone
+            h < 130 -> 0xFFC8C8C8.toInt() // high mountain
+            else -> 0xFFE8E8E8.toInt()    // snow
+        }
+    }
+
+    /**
+     * Simple value noise for terrain simulation.
+     * Produces deterministic height-like values from chunk coordinates.
+     */
+    private fun simulatedHeight(x: Int, z: Int, dimension: com.zaralynchisel.editioncore.DimensionType): Float {
+        val dimMix = when (dimension) {
+            com.zaralynchisel.editioncore.DimensionType.OVERWORLD -> 0
+            com.zaralynchisel.editioncore.DimensionType.NETHER -> 31
+            com.zaralynchisel.editioncore.DimensionType.END -> 63
+        }
+        // Simple hash → mix
+        val n = ((x * 1619 + z * 31337 + dimMix * 65537).toLong() and 0x7FFFFFFF).toInt()
+        // Generate pseudo-noise by mixing
+        val n1 = n % 1000 / 1000f
+        val n2 = ((n shr 10) % 1000) / 1000f
+        val mix = (n1 * 0.7f + n2 * 0.3f)
+        // Map to height range 40-140
+        return 40f + mix * 100f
     }
 }

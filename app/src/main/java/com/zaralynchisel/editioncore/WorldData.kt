@@ -46,7 +46,8 @@ data class ChunkInfo(
     val timestamp: Long = 0L,
     val isEmpty: Boolean = false,
     val isCorrupted: Boolean = false,
-    val blockCount: Int = 0
+    val blockCount: Int = 0,
+    val averageHeight: Int = 0  // average surface height, 0 = unknown
 )
 
 /**
