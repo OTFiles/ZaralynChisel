@@ -73,8 +73,10 @@ class WorldSelector(private val context: Context) {
                     return@withFileIO null
                 }
 
-                val reader = stream.use { NbtReader(it) }
+                val reader = NbtReader(stream)
                 val (_, rootCompound) = reader.readRoot()
+                reader.close()
+                stream.close()
                 val data = rootCompound.getCompound("Data")
                     ?: rootCompound
 

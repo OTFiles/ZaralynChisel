@@ -2,74 +2,68 @@ package com.zaralynchisel.fileaccess
 
 import android.content.Context
 import android.net.Uri
-import android.provider.DocumentsContract
+import androidx.documentfile.provider.DocumentFile
 import com.zaralynchisel.utils.Logger
 import java.io.BufferedInputStream
+import java.io.File
 import java.io.InputStream
 
 /**
- * Access files under a SAF document tree URI using ContentResolver.
- * Uses DocumentsContract to build URIs for child documents.
+ * Access files under a SAF document tree URI using DocumentFile API.
+ * Provides fallback to direct File access if SAF URI is not available.
  */
 class SafFileAccess(private val context: Context) {
 
     private var treeUri: Uri? = null
-    private var treeDocId: String? = null
+    private var rootDoc: DocumentFile? = null
 
     fun setTreeUri(uri: Uri) {
         treeUri = uri
-        treeDocId = try {
-            DocumentsContract.getTreeDocumentId(uri)
+        rootDoc = try {
+            DocumentFile.fromTreeUri(context, uri)
         } catch (e: Exception) {
-            Logger.e("Failed to get tree document ID", e)
+            Logger.e("Failed to create DocumentFile from tree URI", e)
             null
         }
-        Logger.d("SafFileAccess setTreeUri: docId=$treeDocId")
+        Logger.d("SafFileAccess setTreeUri: uri=$uri, doc=${rootDoc?.name}")
     }
 
     /**
-     * Build a URI for a child document under the tree.
-     * relativePath is relative to tree root, e.g. "level.dat" or "region/r.0.0.mca".
+     * Find a child document by relative path from tree root.
      */
-    fun buildChildUri(relativePath: String): Uri? {
-        val tree = treeUri ?: return null
-        val baseId = treeDocId ?: return null
-
-        // For direct child: <treeDocId>/document/<name>
-        // For nested: each path segment becomes /document/
+    private fun findChild(relativePath: String): DocumentFile? {
+        val root = rootDoc ?: return null
+        if (relativePath.isEmpty()) return root
         val segments = relativePath.split("/")
-        val childDocId = buildString {
-            append(baseId)
-            for (seg in segments) {
-                append("/document/")
-                append(seg)
-            }
+        var current = root
+        for (seg in segments) {
+            current = current.findFile(seg) ?: return null
         }
-        return DocumentsContract.buildDocumentUriUsingTree(tree, childDocId)
+        return current
     }
 
     /**
      * Open an InputStream for a file relative to the tree root.
      */
-    fun openInputStream(relativePath: String, directFile: java.io.File? = null): InputStream? {
+    fun openInputStream(relativePath: String, directFile: File? = null): InputStream? {
         // Try SAF first
-        val childUri = buildChildUri(relativePath)
-        if (childUri != null) {
-            try {
-                context.contentResolver.openInputStream(childUri)?.let { stream ->
+        try {
+            val child = findChild(relativePath)
+            if (child != null) {
+                context.contentResolver.openInputStream(child.uri)?.let { stream ->
                     Logger.d("SAF openInputStream OK: $relativePath")
                     return BufferedInputStream(stream)
                 }
-            } catch (e: Exception) {
-                Logger.d("SAF openInputStream failed for $relativePath: ${e.message}")
             }
+        } catch (e: Exception) {
+            Logger.d("SAF openInputStream failed for $relativePath: ${e.message}")
         }
 
         // Fallback to direct file access
         if (directFile != null && directFile.exists() && directFile.canRead()) {
             try {
                 Logger.d("Direct file access: $directFile")
-                return BufferedInputStream(java.io.FileInputStream(directFile))
+                return BufferedInputStream(directFile.inputStream())
             } catch (e: Exception) {
                 Logger.e("Direct file access failed: $directFile", e)
             }
@@ -82,20 +76,12 @@ class SafFileAccess(private val context: Context) {
     /**
      * Check if a file exists under the tree.
      */
-    fun exists(relativePath: String, directFile: java.io.File? = null): Boolean {
-        treeUri?.let { tree ->
-            try {
-                val childUri = buildChildUri(relativePath) ?: return@let null
-                // Query to check existence
-                context.contentResolver.query(
-                    childUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-                    null, null, null
-                )?.use { cursor ->
-                    if (cursor.count > 0) return true
-                }
-            } catch (e: Exception) {
-                Logger.d("SAF exists check failed for $relativePath: ${e.message}")
-            }
+    fun exists(relativePath: String, directFile: File? = null): Boolean {
+        try {
+            val child = findChild(relativePath)
+            if (child != null && child.exists()) return true
+        } catch (e: Exception) {
+            Logger.d("SAF exists check failed for $relativePath: ${e.message}")
         }
         return directFile?.exists() == true
     }
@@ -103,33 +89,21 @@ class SafFileAccess(private val context: Context) {
     /**
      * List child entries in a directory under the tree.
      */
-    fun listChildren(relativePath: String, directDir: java.io.File? = null): List<Pair<String, String>> {
-        treeUri?.let { tree ->
-            try {
-                val dirUri = buildChildUri(relativePath) ?: return@let null
-                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                    tree, DocumentsContract.getDocumentId(dirUri)
-                )
-                val cursor = context.contentResolver.query(
-                    childrenUri,
-                    arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                            DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-                    null, null, null
-                )
-                cursor?.use { c ->
-                    val results = mutableListOf<Pair<String, String>>()
-                    while (c.moveToNext()) {
-                        val name = c.getString(1)
-                        val relPath = if (relativePath.isEmpty()) name else "$relativePath/$name"
-                        results.add(relPath to name)
-                    }
-                    return results
+    fun listChildren(relativePath: String, directDir: File? = null): List<Pair<String, String>> {
+        try {
+            val dir = findChild(relativePath)
+            if (dir != null && dir.isDirectory) {
+                return dir.listFiles().mapNotNull { child ->
+                    val name = child.name ?: return@mapNotNull null
+                    val relPath = if (relativePath.isEmpty()) name else "$relativePath/$name"
+                    relPath to name
                 }
-            } catch (e: Exception) {
-                Logger.d("SAF listChildren failed for $relativePath: ${e.message}")
             }
+        } catch (e: Exception) {
+            Logger.d("SAF listChildren failed for $relativePath: ${e.message}")
         }
 
+        // Fallback to direct directory listing
         if (directDir != null && directDir.exists() && directDir.isDirectory) {
             return directDir.listFiles()?.map { f ->
                 f.name to f.name
