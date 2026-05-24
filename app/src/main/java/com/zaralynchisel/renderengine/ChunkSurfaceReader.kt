@@ -119,7 +119,7 @@ object ChunkSurfaceReader {
 
         val bitsPerEntry = maxOf(4, 32 - Integer.numberOfLeadingZeros(palette.value.size - 1))
         val blockIndex = y * 256 + z * 16 + x  // Within 16x16x16 section
-        val paletteIndex = readBits(longs.toLongArray(), blockIndex, bitsPerEntry)
+        val paletteIndex = readBits(longs.toLongArray(), blockIndex, bitsPerEntry).toInt()
 
         if (paletteIndex >= palette.value.size) return "air"
         val entry = palette.value[paletteIndex] as? NbtReader.NbtTag.NbtCompound
