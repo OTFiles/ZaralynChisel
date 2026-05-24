@@ -1,6 +1,10 @@
 package com.zaralynchisel.renderengine
 
 import com.zaralynchisel.editioncore.NbtReader
+import com.zaralynchisel.editioncore.getCompound
+import com.zaralynchisel.editioncore.getInt
+import com.zaralynchisel.editioncore.getList
+import com.zaralynchisel.editioncore.getString
 import com.zaralynchisel.utils.Logger
 import java.io.ByteArrayInputStream
 
