@@ -47,8 +47,20 @@ data class ChunkInfo(
     val isEmpty: Boolean = false,
     val isCorrupted: Boolean = false,
     val blockCount: Int = 0,
-    val averageHeight: Int = 0  // average surface height, 0 = unknown
-)
+    val averageHeight: Int = 0,
+    /** 16×16 MapColor IDs for each column (index = z*16 + x). null if not loaded. */
+    val surfaceColors: IntArray? = null
+) {
+    val hasSurfaceData: Boolean get() = surfaceColors != null
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ChunkInfo) return false
+        return x == other.x && z == other.z && dimension == other.dimension
+    }
+
+    override fun hashCode(): Int = (x * 31 + z) * 31 + dimension.hashCode()
+}
 
 /**
  * Represents a block position within a world.

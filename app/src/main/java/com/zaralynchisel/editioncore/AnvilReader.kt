@@ -1,5 +1,6 @@
 package com.zaralynchisel.editioncore
 
+import com.zaralynchisel.renderengine.ChunkSurfaceReader
 import com.zaralynchisel.utils.Logger
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -130,6 +131,27 @@ class AnvilReader(private val regionFile: File) {
             data
         } catch (e: Exception) {
             Logger.e("Failed to read chunk data at ($localX, $localZ)", e)
+            null
+        }
+    }
+
+    /**
+     * Read the surface MapColor data for a chunk.
+     * Returns 256-entry IntArray (z*16+x indexing) of MapColor IDs.
+     */
+    fun readChunkSurface(localX: Int, localZ: Int): IntArray? {
+        val data = readChunkData(localX, localZ) ?: return null
+        return try {
+            val surface = ChunkSurfaceReader.readSurface(data)
+            val result = IntArray(256)
+            for (z in 0 until 16) {
+                for (x in 0 until 16) {
+                    result[z * 16 + x] = surface[x][z]
+                }
+            }
+            result
+        } catch (e: Exception) {
+            Logger.e("Failed to read chunk surface", e)
             null
         }
     }

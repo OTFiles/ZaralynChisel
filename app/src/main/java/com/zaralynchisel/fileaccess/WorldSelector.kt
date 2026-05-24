@@ -198,6 +198,41 @@ class WorldSelector(private val context: Context) {
         }
     }
 
+    /**
+     * Load surface MapColor data for a single chunk.
+     * Returns the 256-entry IntArray (index = z*16 + x), or null on failure.
+     */
+    suspend fun loadChunkSurface(worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType): IntArray? {
+        return withFileIO {
+            try {
+                val dir = File(File(worldPath, dimension.folderName), "region")
+                val regionX = chunkX shr 5
+                val regionZ = chunkZ shr 5
+                val regionFile = File(dir, "r.$regionX.$regionZ.mca")
+                if (!regionFile.exists()) return@withFileIO null
+
+                val stream = if (safAccess != null) {
+                    val relPath = "region/r.$regionX.$regionZ.mca"
+                    safAccess!!.openInputStream(relPath, regionFile)
+                } else if (regionFile.exists()) {
+                    java.io.BufferedInputStream(java.io.FileInputStream(regionFile))
+                } else null
+
+                if (stream == null) return@withFileIO null
+
+                val reader = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
+                val lx = chunkX and 31
+                val lz = chunkZ and 31
+                val result = reader.readChunkSurface(lx, lz)
+                reader.close()
+                result
+            } catch (e: Exception) {
+                Logger.e("Failed to load surface for ($chunkX, $chunkZ)", e)
+                null
+            }
+        }
+    }
+
     fun rememberWorld(worldPath: String) {
         prefs.addRecentWorld(worldPath)
     }

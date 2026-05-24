@@ -3,6 +3,7 @@ package com.zaralynchisel.renderengine
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import com.zaralynchisel.editioncore.ChunkInfo
 import com.zaralynchisel.editioncore.SelectionArea
@@ -100,7 +101,11 @@ class GodMapRenderer {
 
             if (chunk.isEmpty) {
                 canvas.drawRect(rect, chunkEmptyPaint)
+            } else if (scaledChunkSize >= 2f && chunk.hasSurfaceData) {
+                // Render 16×16 pixel surface data
+                drawChunkSurface(canvas, chunk, rect)
             } else {
+                // Fallback: terrain-based solid color
                 chunkPresentPaint.color = terrainColor(chunk.x, chunk.z, chunk.averageHeight, chunk.dimension)
                 canvas.drawRect(rect, chunkPresentPaint)
             }
@@ -178,6 +183,34 @@ class GodMapRenderer {
         val chunkZ = ((screenZ - offsetZ) / scaledChunkSize).toInt()
         return Pair(chunkX, chunkZ)
     }
+
+    /**
+     * Draw a 16×16 pixel surface bitmap for a chunk.
+     */
+    private fun drawChunkSurface(
+        canvas: android.graphics.Canvas,
+        chunk: ChunkInfo,
+        rect: RectF
+    ) {
+        val colors = chunk.surfaceColors ?: return
+        // Build or retrieve cached bitmap
+        val bitmap = chunkSurfaceCache.getOrPut(Pair(chunk.x, chunk.z)) {
+            Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+        }
+        val pixels = IntArray(256)
+        for (z in 0 until 16) {
+            for (x in 0 until 16) {
+                val colorId = colors[z * 16 + x]
+                pixels[z * 16 + x] = if (colorId > 0) MapColorPalette.getColor(colorId) else 0x00000000.toInt()
+            }
+        }
+        bitmap.setPixels(pixels, 0, 16, 0, 0, 16, 16)
+        val src = Rect(0, 0, 16, 16)
+        val dst = Rect(rect.left.toInt(), rect.top.toInt(), rect.right.toInt(), rect.bottom.toInt())
+        canvas.drawBitmap(bitmap, src, dst, null)
+    }
+
+    private val chunkSurfaceCache = mutableMapOf<Pair<Int, Int>, Bitmap>()
 
     /**
      * Terrain-simulated color based on chunk coordinates and dimension.
