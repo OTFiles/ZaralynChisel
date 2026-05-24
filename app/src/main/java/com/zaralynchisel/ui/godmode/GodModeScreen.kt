@@ -86,7 +86,7 @@ fun GodModeScreen(
             .toMutableList()
 
         var loaded = 0
-        while (pending.isNotEmpty() && isActive) {
+        while (pending.isNotEmpty()) {
             val batch = pending.take(batchSize)
             pending.removeAll(batch)
 
