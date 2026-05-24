@@ -29,6 +29,7 @@ import com.zaralynchisel.fileaccess.WorldCache
 import com.zaralynchisel.renderengine.GodMapRenderer
 import com.zaralynchisel.ZaralynChiselApp
 import com.zaralynchisel.utils.Logger
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -86,7 +87,7 @@ fun GodModeScreen(
             .toMutableList()
 
         var loaded = 0
-        while (pending.isNotEmpty()) {
+        while (pending.isNotEmpty() && isActive) {
             val batch = pending.take(batchSize)
             pending.removeAll(batch)
 
