@@ -73,6 +73,45 @@ fun GodModeScreen(
         }
     }
 
+    // Background surface data loader
+    LaunchedEffect(worldPath, worldData) {
+        if (worldData == null || chunks.isEmpty()) return@LaunchedEffect
+        val worldPathLocal = worldPath
+        val batchSize = 20
+
+        // Find chunks without surface data, sorted by distance from origin
+        val pending = chunks
+            .filter { !it.hasSurfaceData && !it.isEmpty }
+            .sortedBy { (it.x * it.x + it.z * it.z) } // spiral from origin
+            .toMutableList()
+
+        var loaded = 0
+        while (pending.isNotEmpty() && isActive) {
+            val batch = pending.take(batchSize)
+            pending.removeAll(batch)
+
+            val updatedChunks = chunks.toMutableList()
+            for (chunk in batch) {
+                val surface = worldSelector.loadChunkSurface(
+                    worldPathLocal, chunk.x, chunk.z, chunk.dimension
+                )
+                if (surface != null) {
+                    val idx = updatedChunks.indexOf(chunk)
+                    if (idx >= 0) {
+                        updatedChunks[idx] = chunk.copy(
+                            surfaceColors = surface,
+                            averageHeight = surface.average().toInt()
+                        )
+                    }
+                }
+            }
+            chunks = updatedChunks
+            loaded += batch.size
+            Logger.d("Surface loading: $loaded/${pending.size + loaded} chunks")
+        }
+        Logger.i("Surface loading complete: $loaded chunks")
+    }
+
     // Load world data — use cache to avoid re-scanning
     LaunchedEffect(worldPath) {
         isLoading = true
