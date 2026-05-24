@@ -1,201 +1,199 @@
 package com.zaralynchisel.renderengine
 
 /**
- * Minecraft MapColor palette.
- * Based on Minecraft 1.21 MapColor class.
- * Each MapColor has 4 brightness levels: base, shade1 (darker), shade2, shade3 (lightest).
+ * Minecraft MapColor palette (1.21.1, 61 base colors).
+ * Source: https://minecraft.wiki/w/Map_item_format
  */
 object MapColorPalette {
-    // Base colors (index 0-63 in MC's palette)
     private val COLORS = intArrayOf(
-        0xFF000000.toInt(), // 0  NONE (transparent)
-        0xFF7FB238.toInt(), // 1  GRASS light (green)
-        0xFF79C06A.toInt(), // 2  SAND (tan)
-        0xFFA0A0A0.toInt(), // 3  WOOL (gray)
-        0xFFFF0000.toInt(), // 4  FIRE (red)
-        0xFF00FFFF.toInt(), // 5  ICE (cyan)
-        0xFF8C8C8C.toInt(), // 6  METAL (light gray)
-        0xFF5B8C31.toInt(), // 7  PLANT (dark green)
-        0xFFFFFFFF.toInt(), // 8  SNOW (white)
-        0xFFD4D4D4.toInt(), // 9  CLAY (light gray 2)
-        0xFFA0653B.toInt(), // 10 DIRT (brown)
-        0xFF8B6B4A.toInt(), // 11 STONE (dark brown)
-        0xFF7FB2C0.toInt(), // 12 WATER (blue)
-        0xFF4A5263.toInt(), // 13 WOOD (dark gray)
-        0xFF7F6654.toInt(), // 14 QUARTZ?
-        0xFFFFA500.toInt(), // 15 ADOBE? (orange)
-        0xFFFF69B4.toInt(), // 16 MAGENTA?
-        0xFF87CEFA.toInt(), // 17 LIGHT_BLUE?
-        0xFFFFFF00.toInt(), // 18 YELLOW
-        0xFF00FF00.toInt(), // 19 LIME?
-        0xFFFFC0CB.toInt(), // 20 PINK?
-        0xFF808080.toInt(), // 21 GRAY?
-        0xFFC0C0C0.toInt(), // 22 LIGHT_GRAY?
-        0xFF008080.toInt(), // 23 TEAL?
-        0xFF800080.toInt(), // 24 PURPLE?
-        0xFF000080.toInt(), // 25 NAVY?
-        0xFF606028.toInt(), // 26 EMERALD? (dark green)
-        0xFFC78168.toInt(), // 27 TERRACOTTA_WHITE
-        0xFFAF5227.toInt(), // 28 TERRACOTTA_ORANGE
-        0xFFA85568.toInt(), // 29 TERRACOTTA_MAGENTA
-        0xFF7FC5CC.toInt(), // 30 TERRACOTTA_LIGHT_BLUE
-        0xFFD8B35E.toInt(), // 31 TERRACOTTA_YELLOW
-        0xFF82BA47.toInt(), // 32 TERRACOTTA_LIME
-        0xFFD17C8E.toInt(), // 33 TERRACOTTA_PINK
-        0xFF75675D.toInt(), // 34 TERRACOTTA_GRAY
-        0xFF869CAD.toInt(), // 35 TERRACOTTA_LIGHT_GRAY
-        0xFF226E79.toInt(), // 36 TERRACOTTA_CYAN
-        0xFF794473.toInt(), // 37 TERRACOTTA_PURPLE
-        0xFF3F305D.toInt(), // 38 TERRACOTTA_BLUE
-        0xFF5B4626.toInt(), // 39 TERRACOTTA_BROWN
-        0xFF5F6F32.toInt(), // 40 TERRACOTTA_GREEN
-        0xFFAC3B31.toInt(), // 41 TERRACOTTA_RED
-        0xFF1C1B21.toInt(), // 42 TERRACOTTA_BLACK
-        0xFFB28B44.toInt(), // 43 GOLD
-        0xFF409194.toInt(), // 44 DIAMOND
-        0xFF4F32A0.toInt(), // 45 LAPIS
-        0xFF3E9A39.toInt(), // 46 EMERALD (green)
-        0xFF905E3F.toInt(), // 47 PODZOL (brown)
-        0xFFC53535.toInt(), // 48 NETHER
-        0xFFF9F9F9.toInt(), // 49 TERRACOTTA_WHITE_ALT
-        0xFFC78168.toInt(), // 50
-        0xFFAF5227.toInt(), // 51
-        0xFFA85568.toInt(), // 52
-        0xFF7FC5CC.toInt(), // 53
-        0xFFD8B35E.toInt(), // 54
-        0xFF82BA47.toInt(), // 55
-        0xFFD17C8E.toInt(), // 56
-        0xFF75675D.toInt(), // 57
-        0xFF869CAD.toInt(), // 58
-        0xFF226E79.toInt(), // 59
-        0xFF794473.toInt(), // 60
-        0xFF3F305D.toInt(), // 61
-        0xFF5B4626.toInt(), // 62
-        0xFF5F6F32.toInt(), // 63
+        0x00000000.toInt(), // 0  NONE
+        0xFF7FB238.toInt(), // 1  GRASS
+        0xFFF7E9A3.toInt(), // 2  SAND
+        0xFFC7C7C7.toInt(), // 3  WOOL
+        0xFFFF0000.toInt(), // 4  FIRE
+        0xFFA0A0FF.toInt(), // 5  ICE
+        0xFFA7A7A7.toInt(), // 6  METAL
+        0xFF007C00.toInt(), // 7  PLANT
+        0xFFFFFFFF.toInt(), // 8  SNOW
+        0xFFA4A8B8.toInt(), // 9  CLAY
+        0xFF976D4D.toInt(), // 10 DIRT
+        0xFF707070.toInt(), // 11 STONE
+        0xFF4040FF.toInt(), // 12 WATER
+        0xFF8F7748.toInt(), // 13 WOOD
+        0xFFFFFCF5.toInt(), // 14 QUARTZ
+        0xFFD87F33.toInt(), // 15 COLOR_ORANGE
+        0xFFB24CD8.toInt(), // 16 COLOR_MAGENTA
+        0xFF6699D8.toInt(), // 17 COLOR_LIGHT_BLUE
+        0xFFE5E533.toInt(), // 18 COLOR_YELLOW
+        0xFF7FCC19.toInt(), // 19 COLOR_LIGHT_GREEN
+        0xFFF27FA5.toInt(), // 20 COLOR_PINK
+        0xFF4C4C4C.toInt(), // 21 COLOR_GRAY
+        0xFF999999.toInt(), // 22 COLOR_LIGHT_GRAY
+        0xFF4C7F99.toInt(), // 23 COLOR_CYAN
+        0xFF7F3FB2.toInt(), // 24 COLOR_PURPLE
+        0xFF334CB2.toInt(), // 25 COLOR_BLUE
+        0xFF664C33.toInt(), // 26 COLOR_BROWN
+        0xFF667F33.toInt(), // 27 COLOR_GREEN
+        0xFF993333.toInt(), // 28 COLOR_RED
+        0xFF191919.toInt(), // 29 COLOR_BLACK
+        0xFFFAEE4D.toInt(), // 30 GOLD
+        0xFF5CDBD5.toInt(), // 31 DIAMOND
+        0xFF4A80FF.toInt(), // 32 LAPIS
+        0xFF00D93A.toInt(), // 33 EMERALD
+        0xFF815631.toInt(), // 34 PODZOL
+        0xFF700200.toInt(), // 35 NETHER
+        0xFFD1B1A1.toInt(), // 36 TERRACOTTA_WHITE
+        0xFF9F5224.toInt(), // 37 TERRACOTTA_ORANGE
+        0xFF95576C.toInt(), // 38 TERRACOTTA_MAGENTA
+        0xFF706C8A.toInt(), // 39 TERRACOTTA_LIGHT_BLUE
+        0xFFBA8524.toInt(), // 40 TERRACOTTA_YELLOW
+        0xFF677535.toInt(), // 41 TERRACOTTA_LIGHT_GREEN
+        0xFFA04D4E.toInt(), // 42 TERRACOTTA_PINK
+        0xFF392923.toInt(), // 43 TERRACOTTA_GRAY
+        0xFF876B62.toInt(), // 44 TERRACOTTA_LIGHT_GRAY
+        0xFF575C5C.toInt(), // 45 TERRACOTTA_CYAN
+        0xFF7A4958.toInt(), // 46 TERRACOTTA_PURPLE
+        0xFF4C3E5C.toInt(), // 47 TERRACOTTA_BLUE
+        0xFF4C3223.toInt(), // 48 TERRACOTTA_BROWN
+        0xFF4C522A.toInt(), // 49 TERRACOTTA_GREEN
+        0xFF8E3C2E.toInt(), // 50 TERRACOTTA_RED
+        0xFF251610.toInt(), // 51 TERRACOTTA_BLACK
+        0xFFBD3031.toInt(), // 52 CRIMSON_NYLIUM
+        0xFF943F61.toInt(), // 53 CRIMSON_STEM
+        0xFF5C191D.toInt(), // 54 CRIMSON_HYPHAE
+        0xFF167E86.toInt(), // 55 WARPED_NYLIUM
+        0xFF3A8E8C.toInt(), // 56 WARPED_STEM
+        0xFF562C3E.toInt(), // 57 WARPED_HYPHAE
+        0xFF14B485.toInt(), // 58 WARPED_WART_BLOCK
+        0xFF646464.toInt(), // 59 DEEPSLATE
+        0xFFD8AF93.toInt(), // 60 RAW_IRON
+        0xFF7FA796.toInt(), // 61 GLOW_LICHEN
     )
 
-    /**
-     * Multiply a color by a brightness factor.
-     * shade: 0=base, 1=darker, 2=darker still, 3=lightest
-     */
-    private fun shadeColor(baseColor: Int, shade: Int): Int {
-        val r = (baseColor shr 16) and 0xFF
-        val g = (baseColor shr 8) and 0xFF
-        val b = baseColor and 0xFF
-
-        val factor = when (shade) {
-            0 -> 1.0
-            1 -> 180.0 / 255.0
-            2 -> 140.0 / 255.0
-            3 -> 220.0 / 255.0
-            else -> 1.0
-        }
-
-        val sr = (r * factor).toInt().coerceIn(0, 255)
-        val sg = (g * factor).toInt().coerceIn(0, 255)
-        val sb = (b * factor).toInt().coerceIn(0, 255)
-
-        return (0xFF shl 24) or (sr shl 16) or (sg shl 8) or sb
-    }
-
-    /**
-     * Get the RGB color for a given map color id and shade.
-     */
     fun getColor(id: Int, shade: Int = 0): Int {
         if (id < 0 || id >= COLORS.size) return 0xFF000000.toInt()
-        return shadeColor(COLORS[id], shade)
+        if (shade == 0) return COLORS[id]
+        val c = COLORS[id]
+        val r = ((c shr 16) and 0xFF) * when (shade) {
+            1 -> 0.71; 2 -> 0.55; 3 -> 0.86; else -> 1.0
+        }
+        val g = ((c shr 8) and 0xFF) * when (shade) {
+            1 -> 0.71; 2 -> 0.55; 3 -> 0.86; else -> 1.0
+        }
+        val b = (c and 0xFF) * when (shade) {
+            1 -> 0.71; 2 -> 0.55; 3 -> 0.86; else -> 1.0
+        }
+        return (0xFF shl 24) or (r.toInt() shl 16) or (g.toInt() shl 8) or b.toInt()
     }
 
-    /**
-     * Map common block names to MapColor indices.
-     * Returns map color ID (0-63).
-     */
     fun getMapColorId(blockName: String): Int {
         val name = blockName.removePrefix("minecraft:")
         return when {
-            // Grass / plants
-            name.startsWith("grass") || name.contains("grass") -> 1
-            name == "short_grass" || name == "tall_grass" || name == "fern" -> 1
-            name == "vine" || name == "lily_pad" -> 1
-            name == "sugar_cane" || name == "bamboo" -> 7
-
-            // Leaves
-            name.contains("leaves") -> 7
-            name.contains("leaf") -> 7
-
-            // Sand / clay
-            name == "sand" || name == "red_sand" -> 2
-            name == "sandstone" || name.contains("sandstone") -> 2
+            name == "air" || name == "cave_air" || name == "void_air" || name == "barrier" || name == "light" -> 0
+            name == "grass_block" || name == "short_grass" || name == "tall_grass" || name == "fern" || name == "large_fern" || name == "vine" || name == "lily_pad" || name == "sugar_cane" || name == "bamboo" -> 1
+            name.contains("leaves") || name == "azalea" || name == "flowering_azalea" || name == "mangrove_roots" || name == "moss_block" || name == "moss_carpet" -> 7
+            name == "sand" || name == "red_sand" || name == "suspicious_sand" -> 2
+            name.startsWith("sandstone") -> 2
+            name == "end_stone" || name == "end_stone_bricks" || name == "bone_block" -> 2
+            name == "stone" || name == "cobblestone" || name == "mossy_cobblestone" || name == "gravel" || name == "suspicious_gravel" -> 11
+            name == "andesite" || name == "polished_andesite" -> 11
+            name == "diorite" || name == "polished_diorite" -> 14
+            name == "granite" || name == "polished_granite" -> 15
+            name.startsWith("deepslate") || name == "deepslate" -> 59
+            name == "tuff" || name.startsWith("tuff_") || name == "basalt" || name == "polished_basalt" -> 21
+            name == "calcite" -> 14
+            name == "bedrock" -> 29
+            name == "obsidian" || name == "crying_obsidian" -> 29
+            name == "dirt" || name == "coarse_dirt" || name == "rooted_dirt" || name == "dirt_path" || name == "farmland" || name == "mud" || name == "packed_mud" || name == "mud_bricks" -> 10
+            name == "podzol" -> 34
+            name == "mycelium" -> 24
+            name.contains("_log") || name.contains("_wood") -> when {
+                name.contains("oak") || name.contains("spruce") || name.contains("birch") -> 13
+                name.contains("jungle") || name.contains("acacia") -> 15
+                name.contains("dark") -> 26
+                name.contains("mangrove") -> 35
+                name.contains("cherry") -> 20
+                name.contains("crimson") -> 53
+                name.contains("warped") -> 56
+                else -> 13
+            }
+            name.contains("planks") || name == "bookshelf" || name == "crafting_table" || name == "note_block" -> when {
+                name.contains("oak") || name.contains("spruce") || name.contains("birch") -> 13
+                name.contains("jungle") || name.contains("acacia") -> 15
+                name.contains("dark") -> 26
+                name.contains("mangrove") -> 35
+                name.contains("cherry") -> 20
+                name.contains("crimson") -> 53
+                name.contains("warped") -> 56
+                else -> 13
+            }
+            name == "water" || name == "bubble_column" -> 12
+            name == "ice" || name == "packed_ice" || name == "blue_ice" || name == "frosted_ice" -> 5
+            name == "snow" || name == "snow_block" || name == "powder_snow" || name == "white_wool" -> 8
+            name == "quartz_block" || name.startsWith("quartz_") || name == "smooth_quartz" -> 14
             name == "clay" -> 9
-
-            // Stone / rock
-            name == "stone" || name == "cobblestone" -> 11
-            name == "stone_bricks" || name.contains("bricks") -> 11
-            name == "andesite" || name == "diorite" || name == "granite" -> 11
-            name == "gravel" -> 11
-            name == "bedrock" -> 13
-            name == "obsidian" -> 13
-
-            // Dirt
-            name == "dirt" || name == "coarse_dirt" -> 10
-            name == "podzol" -> 47
-            name == "farmland" -> 10
-            name == "mud" || name == "mud_bricks" -> 10
-
-            // Wood / logs
-            name.contains("log") || name.contains("wood") -> 13
-            name.contains("planks") -> 27  // terracotta_white (birch-like)
-
-            // Water / ice
-            name == "water" || name.contains("water") -> 12
-            name == "ice" || name == "packed_ice" || name == "blue_ice" -> 5
-
-            // Snow
-            name == "snow" || name == "snow_block" || name == "powder_snow" -> 8
-
-            // Nether blocks
-            name == "netherrack" || name == "crimson_nylium" || name == "warped_nylium" -> 48
-            name == "soul_sand" || name == "soul_soil" -> 48
-            name == "basalt" || name == "blackstone" -> 13
-
-            // End blocks
-            name == "end_stone" -> 2  // sand-like
-
-            // Terracotta / concrete
-            name.contains("terracotta") -> when {
-                name.contains("white") -> 27
-                name.contains("orange") -> 28
-                name.contains("red") -> 41
-                name.contains("yellow") -> 31
-                name.contains("green") -> 40
-                name.contains("blue") || name.contains("light_blue") -> 38
-                else -> 27
+            name.contains("terracotta") -> {
+                val tc = name.removePrefix("_").removeSuffix("terracotta").removeSuffix("_terracotta")
+                when {
+                    name.contains("white") -> 36; name.contains("orange") -> 37
+                    name.contains("magenta") -> 38; name.contains("light_blue") -> 39
+                    name.contains("yellow") -> 40; name.contains("lime") -> 41
+                    name.contains("pink") -> 42; name.contains("gray") && !name.contains("light") -> 43
+                    name.contains("light_gray") -> 44; name.contains("cyan") -> 45
+                    name.contains("purple") -> 46; name.contains("blue") -> 47
+                    name.contains("brown") -> 48; name.contains("green") -> 49
+                    name.contains("red") -> 50; name.contains("black") -> 51
+                    else -> 10
+                }
             }
             name.contains("concrete") -> when {
-                name.contains("white") -> 8
-                name.contains("black") || name.contains("gray") -> 6
+                name.contains("white") -> 8; name.contains("orange") -> 15
+                name.contains("magenta") -> 16; name.contains("light_blue") -> 17
+                name.contains("yellow") -> 18; name.contains("lime") -> 19
+                name.contains("pink") -> 20; name.contains("gray") && !name.contains("light") -> 21
+                name.contains("light_gray") -> 22; name.contains("cyan") -> 23
+                name.contains("purple") -> 24; name.contains("blue") -> 25
+                name.contains("brown") -> 26; name.contains("green") -> 27
+                name.contains("red") -> 28; name.contains("black") -> 29
                 else -> 6
             }
-            name.contains("wool") -> 3
-
-            // Ores / minerals
-            name == "gold_block" || name == "gold_ore" || name.contains("gold") -> 43
-            name == "diamond_block" || name == "diamond_ore" -> 44
-            name == "iron_block" || name == "iron_ore" || name.contains("iron") -> 6
-            name == "lapis_block" || name == "lapis_ore" -> 45
-            name == "emerald_block" || name == "emerald_ore" -> 46
-            name == "copper_block" || name == "copper_ore" || name.contains("copper") -> 28
-
-            // Coral / underwater
-            name.contains("coral") -> when {
-                name.contains("red") -> 4
-                name.contains("blue") -> 12
-                name.contains("yellow") -> 18
-                else -> 27
+            name.contains("wool") || name.contains("carpet") -> when {
+                name.contains("white") -> 8; name.contains("orange") -> 15
+                name.contains("magenta") -> 16; name.contains("light_blue") -> 17
+                name.contains("yellow") -> 18; name.contains("lime") -> 19
+                name.contains("pink") -> 20; name.contains("gray") && !name.contains("light") -> 21
+                name.contains("light_gray") -> 22; name.contains("cyan") -> 23
+                name.contains("purple") -> 24; name.contains("blue") -> 25
+                name.contains("brown") -> 26; name.contains("green") -> 27
+                name.contains("red") -> 28; name.contains("black") -> 29
+                else -> 3
             }
-
-            // Default by material guess
-            else -> 0  // transparent (air)
+            name == "iron_block" || name == "iron_ore" || name.contains("iron_ore") || name == "raw_iron_block" -> 6
+            name == "gold_block" || name == "gold_ore" || name.contains("gold_ore") || name == "raw_gold_block" -> 30
+            name == "diamond_block" || name == "diamond_ore" || name.contains("diamond_ore") -> 31
+            name == "emerald_block" || name == "emerald_ore" || name.contains("emerald_ore") -> 33
+            name == "lapis_block" || name == "lapis_ore" || name.contains("lapis_ore") -> 32
+            name == "redstone_block" || name == "redstone_ore" || name.contains("redstone_ore") -> 28
+            name == "copper_block" || name.startsWith("copper_") || name.contains("copper_ore") -> 15
+            name == "coal_block" || name == "coal_ore" || name.contains("coal_ore") -> 29
+            name == "netherrack" || name == "nether_bricks" || name == "red_nether_bricks" || name == "ancient_debris" -> 35
+            name == "crimson_nylium" -> 52; name == "warped_nylium" -> 55
+            name == "soul_sand" || name == "soul_soil" -> 26
+            name == "blackstone" || name.startsWith("blackstone_") -> 29
+            name == "glowstone" || name == "shroomlight" || name == "sponge" || name == "wet_sponge" || name == "hay_block" || name == "bee_nest" || name == "beehive" -> 18
+            name == "pumpkin" || name == "carved_pumpkin" || name == "jack_o_lantern" -> 15
+            name == "melon" -> 19
+            name.contains("coral") -> when {
+                name.contains("red") || name.contains("fire") -> 4
+                name.contains("blue") || name.contains("tube") -> 12
+                name.contains("yellow") || name.contains("horn") -> 18
+                name.contains("pink") || name.contains("brain") -> 20
+                name.contains("purple") || name.contains("bubble") -> 24
+                else -> 20
+            }
+            name == "sculk" || name.startsWith("sculk_") -> 29
+            name == "kelp" || name == "seagrass" || name == "tall_seagrass" -> 7
+            else -> 0
         }
     }
 }
