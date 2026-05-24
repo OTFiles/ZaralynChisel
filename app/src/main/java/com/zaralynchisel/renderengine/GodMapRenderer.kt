@@ -101,7 +101,7 @@ class GodMapRenderer {
 
             if (chunk.isEmpty) {
                 canvas.drawRect(rect, chunkEmptyPaint)
-            } else if (scaledChunkSize >= 2f && chunk.hasSurfaceData) {
+            } else if (scaledChunkSize >= 0.5f && chunk.hasSurfaceData) {
                 // Render 16×16 pixel surface data
                 drawChunkSurface(canvas, chunk, rect)
             } else {
@@ -255,21 +255,21 @@ class GodMapRenderer {
 
     /**
      * Simple value noise for terrain simulation.
-     * Produces deterministic height-like values from chunk coordinates.
+     * Uses integer hash (Wang mix) to avoid repeating patterns.
      */
     private fun simulatedHeight(x: Int, z: Int, dimension: com.zaralynchisel.editioncore.DimensionType): Float {
         val dimMix = when (dimension) {
             com.zaralynchisel.editioncore.DimensionType.OVERWORLD -> 0
-            com.zaralynchisel.editioncore.DimensionType.NETHER -> 31
-            com.zaralynchisel.editioncore.DimensionType.END -> 63
+            com.zaralynchisel.editioncore.DimensionType.NETHER -> 0x55555555
+            com.zaralynchisel.editioncore.DimensionType.END -> 0x33333333
         }
-        // Simple hash → mix
-        val n = ((x * 1619 + z * 31337 + dimMix * 65537).toLong() and 0x7FFFFFFF).toInt()
-        // Generate pseudo-noise by mixing
-        val n1 = n % 1000 / 1000f
-        val n2 = ((n shr 10) % 1000) / 1000f
-        val mix = (n1 * 0.7f + n2 * 0.3f)
-        // Map to height range 40-140
-        return 40f + mix * 100f
+        // Integer hash function (Wang hash / xxHash-style mix)
+        var h = x * 374761393 + z * 668265263 + dimMix
+        h = (h xor (h ushr 13)) * 1274126177
+        h = h xor (h ushr 16)
+        // Map to 0..1 range
+        val v = ((h.toLong() and 0xFFFFFFFFL).toFloat()) / 4294967296f
+        val curved = (v - 0.5f) * 1.8f + 0.5f  // expand range slightly
+        return 40f + curved.coerceIn(0f, 1f) * 100f
     }
 }

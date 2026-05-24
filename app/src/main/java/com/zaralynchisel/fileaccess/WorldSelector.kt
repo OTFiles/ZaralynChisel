@@ -205,14 +205,16 @@ class WorldSelector(private val context: Context) {
     suspend fun loadChunkSurface(worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType): IntArray? {
         return withFileIO {
             try {
-                val dir = File(File(worldPath, dimension.folderName), "region")
+                // dimension.folderName is already the relative path, e.g. "region" or "DIM-1/region"
+                val regionDir = File(worldPath, dimension.folderName)
                 val regionX = chunkX shr 5
                 val regionZ = chunkZ shr 5
-                val regionFile = File(dir, "r.$regionX.$regionZ.mca")
+                val regionFile = File(regionDir, "r.$regionX.$regionZ.mca")
                 if (!regionFile.exists()) return@withFileIO null
 
                 val stream = if (safAccess != null) {
-                    val relPath = "region/r.$regionX.$regionZ.mca"
+                    // SAF: relative path under tree root, e.g. "region/r.0.0.mca"
+                    val relPath = "${dimension.folderName}/r.$regionX.$regionZ.mca"
                     safAccess!!.openInputStream(relPath, regionFile)
                 } else if (regionFile.exists()) {
                     java.io.BufferedInputStream(java.io.FileInputStream(regionFile))
