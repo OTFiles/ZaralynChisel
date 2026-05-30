@@ -4,6 +4,7 @@ import com.zaralynchisel.editioncore.NbtReader
 import com.zaralynchisel.editioncore.getCompound
 import com.zaralynchisel.editioncore.getInt
 import com.zaralynchisel.editioncore.getList
+import com.zaralynchisel.editioncore.getLongArray
 import com.zaralynchisel.editioncore.getString
 import com.zaralynchisel.utils.Logger
 import java.io.ByteArrayInputStream
@@ -99,7 +100,8 @@ object ChunkSurfaceReader {
     ): String {
         val blockStates = section.getCompound("block_states") ?: return "air"
         val palette = blockStates.getList("palette") ?: return "air"
-        val data = blockStates.getList("data")
+        // data is TAG_Long_Array (packed long array), not TAG_List
+        val data = blockStates.getLongArray("data")
 
         // Single palette entry -> all blocks are the same
         if (palette.value.size == 1) {
@@ -108,18 +110,15 @@ object ChunkSurfaceReader {
         }
 
         // If no data array, can't determine
-        if (data == null) {
+        if (data == null || data.isEmpty()) {
             val entry = palette.value.firstOrNull() as? NbtReader.NbtTag.NbtCompound
             return entry?.getString("Name") ?: "air"
         }
 
-        // Decode palette index from long array data
-        val longs = data.value.filterIsInstance<NbtReader.NbtTag.NbtLong>().map { it.value }
-        if (longs.isEmpty()) return "air"
-
+        // Decode palette index from packed long array
         val bitsPerEntry = maxOf(4, 32 - Integer.numberOfLeadingZeros(palette.value.size - 1))
         val blockIndex = y * 256 + z * 16 + x  // Within 16x16x16 section
-        val paletteIndex = readBits(longs.toLongArray(), blockIndex, bitsPerEntry).toInt()
+        val paletteIndex = readBits(data, blockIndex, bitsPerEntry).toInt()
 
         if (paletteIndex >= palette.value.size) return "air"
         val entry = palette.value[paletteIndex] as? NbtReader.NbtTag.NbtCompound

@@ -224,3 +224,8 @@ fun NbtReader.NbtTag.NbtCompound.getList(path: String): NbtReader.NbtTag.NbtList
     val tag = resolvePath(path) ?: return null
     return tag as? NbtReader.NbtTag.NbtList
 }
+
+fun NbtReader.NbtTag.NbtCompound.getLongArray(path: String): LongArray? {
+    val tag = resolvePath(path) ?: return null
+    return (tag as? NbtReader.NbtTag.NbtLongArray)?.value
+}

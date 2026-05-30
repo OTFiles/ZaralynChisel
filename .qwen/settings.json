@@ -21,7 +21,8 @@
       "Bash(do)",
       "Bash(then)",
       "Bash(fi)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(python3 *)"
     ]
   },
   "$version": 4

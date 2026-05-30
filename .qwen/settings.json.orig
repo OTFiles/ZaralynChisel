@@ -1,7 +1,28 @@
 {
   "permissions": {
     "allow": [
-      "Bash(java *)"
+      "Bash(java *)",
+      "Bash(kotlin *)",
+      "Bash(ls *)",
+      "Bash(gh *)",
+      "Bash(apt *)",
+      "Bash(uname *)",
+      "Bash(mkdir *)",
+      "Bash(curl *)",
+      "Bash(unzip *)",
+      "Bash(mv *)",
+      "Bash(rm *)",
+      "Bash(git checkout *)",
+      "Bash(git push *)",
+      "WebFetch(www.gnu.org)",
+      "Bash(sed *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(do)",
+      "Bash(then)",
+      "Bash(fi)",
+      "Bash(done)"
     ]
-  }
+  },
+  "$version": 4
 }
