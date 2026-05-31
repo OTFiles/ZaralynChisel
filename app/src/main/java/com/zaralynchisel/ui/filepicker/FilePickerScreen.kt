@@ -70,6 +70,8 @@ fun FilePickerScreen(
                     )
                     safAccess.setTreeUri(uri)
                     worldSelector.safAccess = safAccess
+                    // Also set on application-level safAccess for GodMode/PlayerMode screens
+                    (context.applicationContext as com.zaralynchisel.ZaralynChiselApp).safAccess.setTreeUri(uri)
                     val resolvedPath = worldSelector.resolveSafUri(uri)
                     if (resolvedPath != null) {
                         val validation = worldSelector.validateWorld(resolvedPath)
