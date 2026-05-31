@@ -74,43 +74,42 @@ fun GodModeScreen(
         }
     }
 
-    // Background surface data loader
-    LaunchedEffect(worldPath, worldData) {
+    // Load surface data for VISIBLE chunks only (viewport-based)
+    LaunchedEffect(worldPath, worldData, viewX, viewZ, zoom) {
         if (worldData == null || chunks.isEmpty()) return@LaunchedEffect
         val worldPathLocal = worldPath
-        val batchSize = 20
 
-        // Find chunks without surface data, sorted by distance from origin
-        val pending = chunks
-            .filter { !it.hasSurfaceData && !it.isEmpty }
-            .sortedBy { (it.x * it.x + it.z * it.z) } // spiral from origin
-            .toMutableList()
+        // Determine visible chunk range
+        val viewRadius = (200f / zoom).toInt().coerceIn(10, 500)
+        val minX = viewX.toInt() - viewRadius
+        val maxX = viewX.toInt() + viewRadius
+        val minZ = viewZ.toInt() - viewRadius
+        val maxZ = viewZ.toInt() + viewRadius
 
-        var loaded = 0
-        while (pending.isNotEmpty() && isActive) {
-            val batch = pending.take(batchSize)
-            pending.removeAll(batch)
+        // Filter visible chunks without surface data
+        val visible = chunks.filter { chunk ->
+            !chunk.hasSurfaceData && !chunk.isEmpty &&
+            chunk.x in minX..maxX && chunk.z in minZ..maxZ
+        }.take(30)
 
-            val updatedChunks = chunks.toMutableList()
-            for (chunk in batch) {
-                val surface = worldSelector.loadChunkSurface(
-                    worldPathLocal, chunk.x, chunk.z, chunk.dimension
-                )
-                if (surface != null) {
-                    val idx = updatedChunks.indexOf(chunk)
-                    if (idx >= 0) {
-                        updatedChunks[idx] = chunk.copy(
-                            surfaceColors = surface,
-                            averageHeight = surface.average().toInt()
-                        )
-                    }
+        if (visible.isEmpty()) return@LaunchedEffect
+
+        val updatedChunks = chunks.toMutableList()
+        for (chunk in visible) {
+            val surface = worldSelector.loadChunkSurface(
+                worldPathLocal, chunk.x, chunk.z, chunk.dimension
+            )
+            if (surface != null) {
+                val idx = updatedChunks.indexOf(chunk)
+                if (idx >= 0) {
+                    updatedChunks[idx] = chunk.copy(
+                        surfaceColors = surface,
+                        averageHeight = surface.average().toInt()
+                    )
                 }
             }
-            chunks = updatedChunks
-            loaded += batch.size
-            Logger.d("Surface loading: $loaded/${pending.size + loaded} chunks")
         }
-        Logger.i("Surface loading complete: $loaded chunks")
+        chunks = updatedChunks
     }
 
     // Load world data — use cache to avoid re-scanning
