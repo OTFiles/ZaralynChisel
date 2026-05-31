@@ -24,17 +24,12 @@ object ChunkSurfaceReader {
             val (_, root) = reader.readRoot()
             reader.close()
 
-            // Read heightmap
+            // Read heightmap (TAG_Long_Array, not TAG_List!)
             val heightmaps = root.getCompound("Heightmaps") ?: root
-            val motionBlocking = heightmaps.getList("MOTION_BLOCKING")
+            val motionBlocking = heightmaps.getLongArray("MOTION_BLOCKING")
             var heights: LongArray? = null
             if (motionBlocking != null) {
-                // MOTION_BLOCKING is a packed long array of 16*16 = 256 values, 9 bits each
-                val longs = motionBlocking.value
-                    .filterIsInstance<NbtReader.NbtTag.NbtLong>()
-                    .map { it.value }
-                    .toLongArray()
-                heights = decodeHeightmap(longs, 9, 256)
+                heights = decodeHeightmap(motionBlocking, 9, 256)
             }
 
             // Read sections to get block at each surface position

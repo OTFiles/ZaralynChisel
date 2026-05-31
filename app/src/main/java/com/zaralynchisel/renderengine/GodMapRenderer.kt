@@ -239,13 +239,14 @@ class GodMapRenderer {
                 (0xFF shl 24) or (r shl 16) or (g shl 8) or b
             }
             dimension == com.zaralynchisel.editioncore.DimensionType.END -> {
-                // End: pale yellow
-                0xFFD4C898.toInt()
+                0xFFD4C898.toInt()  // End: pale yellow
             }
-            h < 55 -> 0xFF3E7A28.toInt()  // deep green
-            h < 63 -> 0xFF5C9E3A.toInt()  // grass green
-            h < 68 -> 0xFF7FB238.toInt()  // light grass
-            h < 75 -> 0xFF8B7355.toInt()  // brown / dirt
+            // Overworld height-based coloring
+            h < 50 -> 0xFF4040FF.toInt()  // ocean blue (water)
+            h < 55 -> 0xFF3E7A28.toInt()  // deep green / river
+            h < 63 -> 0xFF7FB238.toInt()  // grass green (MapColor 1)
+            h < 68 -> 0xFF8F9C32.toInt()  // light grass
+            h < 75 -> 0xFF976D4D.toInt()  // brown / dirt (MapColor 10)
             h < 90 -> 0xFF9D9D9D.toInt()  // stone gray
             h < 110 -> 0xFFB0B0B0.toInt() // light stone
             h < 130 -> 0xFFC8C8C8.toInt() // high mountain
