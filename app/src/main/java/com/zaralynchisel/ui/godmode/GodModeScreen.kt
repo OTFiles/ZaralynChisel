@@ -94,12 +94,14 @@ fun GodModeScreen(
 
         if (visible.isEmpty()) return@LaunchedEffect
 
+        var loaded = 0; var failed = 0
         val updatedChunks = chunks.toMutableList()
         for (chunk in visible) {
             val surface = worldSelector.loadChunkSurface(
                 worldPathLocal, chunk.x, chunk.z, chunk.dimension
             )
             if (surface != null) {
+                loaded++
                 val idx = updatedChunks.indexOf(chunk)
                 if (idx >= 0) {
                     updatedChunks[idx] = chunk.copy(
@@ -107,8 +109,9 @@ fun GodModeScreen(
                         averageHeight = surface.average().toInt()
                     )
                 }
-            }
+            } else { failed++ }
         }
+        Logger.i("Surface batch: loaded=$loaded failed=$failed totalVisible=${visible.size} totalWithSurface=${updatedChunks.count { it.hasSurfaceData }}/${updatedChunks.size}")
         chunks = updatedChunks
     }
 

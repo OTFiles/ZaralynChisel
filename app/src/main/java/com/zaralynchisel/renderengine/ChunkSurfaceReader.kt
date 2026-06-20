@@ -17,8 +17,11 @@ import java.io.ByteArrayInputStream
 object ChunkSurfaceReader {
 
     /** Result: 16x16 array of MapColor IDs. 0 = no block (air/empty). */
+    private var logCount = 0
+
     fun readSurface(chunkNbt: ByteArray): Array<IntArray> {
         val result = Array(16) { IntArray(16) { 0 } }
+        val doLog = logCount < 3
         try {
             val reader = NbtReader(ByteArrayInputStream(chunkNbt))
             val (_, root) = reader.readRoot()
@@ -27,6 +30,7 @@ object ChunkSurfaceReader {
             // Read heightmap (TAG_Long_Array, not TAG_List!)
             val heightmaps = root.getCompound("Heightmaps") ?: root
             val motionBlocking = heightmaps.getLongArray("MOTION_BLOCKING")
+            if (doLog) Logger.i("ChunkSurface: heightmaps=${heightmaps != null} motionBlocking=${motionBlocking != null}")
             var heights: LongArray? = null
             if (motionBlocking != null) {
                 heights = decodeHeightmap(motionBlocking, 9, 256)
@@ -39,6 +43,8 @@ object ChunkSurfaceReader {
                 .sortedBy { it.getInt("Y") }
 
             if (sectionList.isEmpty()) return heightGradient(heights)
+
+            if (doLog) Logger.i("ChunkSurface: sections=${sectionList.size} sectionYs=${sectionList.take(3).map { it.getInt("Y") }}..${sectionList.takeLast(3).map { it.getInt("Y") }}")
 
             // For each column
             for (x in 0 until 16) {
@@ -57,6 +63,11 @@ object ChunkSurfaceReader {
                     result[x][z] = mapColorId
                 }
             }
+            // Log sample of parsed surface
+            val sample = listOf(result[0][0], result[8][0], result[0][8], result[15][15], result[8][8])
+            val nonZero = result.sumOf { row -> row.count { it > 0 } }
+            if (doLog) Logger.i("ChunkSurface: sample=$sample nonZeroCells=$nonZero/256")
+            logCount++
 
         } catch (e: Exception) {
             Logger.e("Failed to read chunk surface", e)

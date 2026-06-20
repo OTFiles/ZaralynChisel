@@ -228,6 +228,16 @@ class WorldSelector(private val context: Context) {
                 val lz = chunkZ and 31
                 val result = reader.readChunkSurface(lx, lz)
                 reader.close()
+                if (result != null) {
+                    val nonZeroCount = result.count { it != 0 }
+                    if (chunkX == 0 && chunkZ == 0) {
+                        // Detailed log for origin chunk only
+                        val sample = result.take(10).joinToString(",")
+                        Logger.i("Surface loaded for origin chunk (0,0) dim=$dimension region=r.$regionX.$regionZ.mca sample=[$sample] nonZero=$nonZeroCount/256")
+                    }
+                } else {
+                    Logger.w("Surface load FAILED for chunk ($chunkX,$chunkZ) dim=$dimension")
+                }
                 result
             } catch (e: Exception) {
                 Logger.e("Failed to load surface for ($chunkX, $chunkZ)", e)
