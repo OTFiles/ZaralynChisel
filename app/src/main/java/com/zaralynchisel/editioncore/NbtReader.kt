@@ -74,7 +74,7 @@ class NbtReader(input: InputStream) {
             magicBytes[0] == 0x1F.toByte() && magicBytes[1] == 0x8B.toByte() -> {
                 DataInputStream(GZIPInputStream(inputStream))
             }
-            magicBytes[0] == 0x78.toByte() && (magicBytes[1].toInt() and 0xF0) == 0x80 -> {
+            magicBytes[0] == 0x78.toByte() -> {
                 DataInputStream(InflaterInputStream(inputStream))
             }
             else -> {
