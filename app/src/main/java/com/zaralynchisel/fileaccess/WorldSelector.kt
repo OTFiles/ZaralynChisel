@@ -223,6 +223,7 @@ class WorldSelector(private val context: Context) {
                 if (stream == null) return@withFileIO null
 
                 val reader = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
+                reader.open()
                 val lx = chunkX and 31
                 val lz = chunkZ and 31
                 val result = reader.readChunkSurface(lx, lz)
