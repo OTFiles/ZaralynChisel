@@ -202,7 +202,12 @@ private fun NbtReader.NbtTag.NbtCompound.resolvePath(path: String): NbtReader.Nb
 
 fun NbtReader.NbtTag.NbtCompound.getInt(path: String, default: Int = 0): Int {
     val tag = resolvePath(path) ?: return default
-    return (tag as? NbtReader.NbtTag.NbtInt)?.value ?: default
+    return when (tag) {
+        is NbtReader.NbtTag.NbtInt -> tag.value
+        is NbtReader.NbtTag.NbtByte -> tag.value.toInt()
+        is NbtReader.NbtTag.NbtShort -> tag.value.toInt()
+        else -> default
+    }
 }
 
 fun NbtReader.NbtTag.NbtCompound.getLong(path: String, default: Long = 0L): Long {

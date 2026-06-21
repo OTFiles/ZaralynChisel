@@ -24,16 +24,40 @@ object ChunkSurfaceReader {
         val doLog = logCount < 3
         try {
             val reader = NbtReader(ByteArrayInputStream(chunkNbt))
-            val (_, root) = reader.readRoot()
+            val (rootName, root) = reader.readRoot()
             reader.close()
 
-            // Read heightmap (TAG_Long_Array, not TAG_List!)
-            val heightmaps = root.getCompound("Heightmaps") ?: root
-            val motionBlocking = heightmaps.getLongArray("MOTION_BLOCKING")
-            if (doLog) Logger.i("ChunkSurface: heightmaps=${heightmaps != null} motionBlocking=${motionBlocking != null}")
+            if (doLog) Logger.i("ChunkSurface: rootTag=$rootName")
+
+            // Read heightmap (TAG_Long_Array in 1.18+, but some chunks may use TAG_List)
+            val heightmapsCompound = root.getCompound("Heightmaps")
+            val usingRoot = heightmapsCompound == null
+            val heightmaps = heightmapsCompound ?: root
+            var motionBlocking = heightmaps.getLongArray("MOTION_BLOCKING")
+
+            if (doLog) {
+                val keys = heightmaps.value.keys.take(10).joinToString(",")
+                Logger.i("ChunkSurface: usingRoot=$usingRoot hmKeys=[$keys] mbLongArray=${motionBlocking != null}")
+            }
             var heights: LongArray? = null
             if (motionBlocking != null) {
                 heights = decodeHeightmap(motionBlocking, 9, 256)
+            } else {
+                // Fallback: try TAG_List (pre-1.18 chunk format)
+                val mbList = heightmaps.getList("MOTION_BLOCKING")
+                if (mbList != null) {
+                    if (doLog) Logger.i("ChunkSurface: MOTION_BLOCKING is TAG_List, not TAG_Long_Array — decoding from list")
+                    val longs = mbList.value
+                        .filterIsInstance<NbtReader.NbtTag.NbtLong>()
+                        .map { it.value }
+                        .toLongArray()
+                    motionBlocking = longs
+                    heights = decodeHeightmap(longs, 9, 256)
+                }
+            }
+
+            if (doLog && heights != null) {
+                Logger.i("ChunkSurface: heights decoded, sample[0..4]=${heights.take(5).joinToString()}")
             }
 
             // Read sections to get block at each surface position
