@@ -156,12 +156,23 @@ object ChunkSurfaceReader {
     }
 
     /**
-     * Decode packed heightmap long array (compact bits).
+     * Decode packed heightmap long array.
+     * MOTION_BLOCKING stores entries per-long with no cross-long overflow:
+     * each 64-bit long holds entriesPerLong = 64/bitsPerEntry entries
+     * (e.g. 9-bit entries → 7 per long, 63 used bits + 1 zero pad).
+     * This is DIFFERENT from the continuous bitstream used in block_states.
      */
     private fun decodeHeightmap(longs: LongArray, bitsPerEntry: Int, entryCount: Int): LongArray {
         val result = LongArray(entryCount)
-        for (i in result.indices) {
-            result[i] = readBits(longs, i, bitsPerEntry)
+        val entriesPerLong = 64 / bitsPerEntry
+        val mask = (1L shl bitsPerEntry) - 1
+        for (longIdx in longs.indices) {
+            val base = longIdx * entriesPerLong
+            for (entryIdx in 0 until entriesPerLong) {
+                val globalIdx = base + entryIdx
+                if (globalIdx >= entryCount) break
+                result[globalIdx] = (longs[longIdx] ushr (entryIdx * bitsPerEntry)) and mask
+            }
         }
         return result
     }
