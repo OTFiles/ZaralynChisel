@@ -68,23 +68,41 @@ object ChunkSurfaceReader {
 
             if (sectionList.isEmpty()) return heightGradient(heights)
 
-            if (doLog) Logger.i("ChunkSurface: sections=${sectionList.size} sectionYs=${sectionList.take(3).map { it.getInt("Y") }}..${sectionList.takeLast(3).map { it.getInt("Y") }}")
+            val sectionsDesc = sectionList.sortedByDescending { it.getInt("Y") }
+
+            if (doLog) {
+                val status = root.getString("Status", "?")
+                Logger.i("ChunkSurface: sections=${sectionList.size} sectionYs=${sectionList.take(3).map { it.getInt("Y") }}..${sectionList.takeLast(3).map { it.getInt("Y") }} status=$status")
+            }
 
             // For each column
             for (x in 0 until 16) {
                 for (z in 0 until 16) {
-                    val index = z * 16 + x
-                    val surfaceY = heights?.get(index)?.toInt() ?: 64
-                    val sectionIndex = surfaceY shr 4
-
-                    // Find the section
-                    val section = sectionList.find { it.getInt("Y") == sectionIndex }
-                        ?: continue
-
-                    val blockY = surfaceY and 15  // Y within section (0-15)
-                    val blockState = parseBlockAt(section, x, blockY, z)
-                    val mapColorId = MapColorPalette.getMapColorId(blockState)
-                    result[x][z] = mapColorId
+                    if (heights != null) {
+                        val index = z * 16 + x
+                        val surfaceY = heights[index].toInt()
+                        val sectionIndex = surfaceY shr 4
+                        val section = sectionList.find { it.getInt("Y") == sectionIndex }
+                            ?: continue
+                        val blockY = surfaceY and 15
+                        val blockState = parseBlockAt(section, x, blockY, z)
+                        result[x][z] = MapColorPalette.getMapColorId(blockState)
+                    } else {
+                        // ponytail: no heightmap → scan sections top-down
+                        for (section in sectionsDesc) {
+                            var found = false
+                            for (y in 15 downTo 0) {
+                                val blockState = parseBlockAt(section, x, y, z)
+                                val cid = MapColorPalette.getMapColorId(blockState)
+                                if (cid > 0) {
+                                    result[x][z] = cid
+                                    found = true
+                                    break
+                                }
+                            }
+                            if (found) break
+                        }
+                    }
                 }
             }
             // Log sample of parsed surface
