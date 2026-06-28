@@ -104,9 +104,11 @@ fun GodModeScreen(
                 loaded++
                 val idx = updatedChunks.indexOf(chunk)
                 if (idx >= 0) {
+                    val allZero = !surface.any { it != 0 } // ponytail: structure_starts chunks = all air
                     updatedChunks[idx] = chunk.copy(
                         surfaceColors = surface,
-                        averageHeight = surface.average().toInt()
+                        averageHeight = surface.average().toInt(),
+                        isEmpty = chunk.isEmpty || allZero
                     )
                 }
             } else { failed++ }
