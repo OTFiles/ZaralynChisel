@@ -19,6 +19,9 @@ class WorldSelector(private val context: Context) {
 
     private val prefs = PreferenceManager(context)
     var safAccess: SafFileAccess? = null
+    // ponytail: cache last-opened region reader, same-region chunks all need it
+    private var cachedReader: com.zaralynchisel.editioncore.AnvilReader? = null
+    private var cachedRegionIdx: Long = -1L
 
     /**
      * Validate that a given path is a valid Minecraft world.
@@ -212,22 +215,29 @@ class WorldSelector(private val context: Context) {
                 val regionFile = File(regionDir, "r.$regionX.$regionZ.mca")
                 if (!regionFile.exists()) return@withFileIO null
 
-                val stream = if (safAccess != null) {
-                    // SAF: relative path under tree root, e.g. "region/r.0.0.mca"
-                    val relPath = "${dimension.folderName}/r.$regionX.$regionZ.mca"
-                    safAccess!!.openInputStream(relPath, regionFile)
-                } else if (regionFile.exists()) {
-                    java.io.BufferedInputStream(java.io.FileInputStream(regionFile))
-                } else null
+                val regionKey = (regionX.toLong() shl 32) or (regionZ.toLong() and 0xFFFFFFFFL)
+                // ponytail: reuse last region reader, skip reopen+recopy
+                if (cachedRegionIdx != regionKey || cachedReader == null) {
+                    cachedReader?.close(); cachedReader = null
 
-                if (stream == null) return@withFileIO null
+                    val stream = if (safAccess != null) {
+                        val relPath = "${dimension.folderName}/r.$regionX.$regionZ.mca"
+                        safAccess!!.openInputStream(relPath, regionFile)
+                    } else if (regionFile.exists()) {
+                        java.io.BufferedInputStream(java.io.FileInputStream(regionFile))
+                    } else null
 
-                val reader = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
-                reader.open()
+                    if (stream == null) return@withFileIO null
+
+                    cachedReader = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
+                    cachedReader!!.open()
+                    cachedRegionIdx = regionKey
+                }
+                val reader = cachedReader!!
                 val lx = chunkX and 31
                 val lz = chunkZ and 31
                 val result = reader.readChunkSurface(lx, lz)
-                reader.close()
+                // ponytail: keep reader open for next same-region chunk
                 if (result != null) {
                     val nonZeroCount = result.count { it != 0 }
                     if (chunkX == 0 && chunkZ == 0) {
