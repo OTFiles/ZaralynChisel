@@ -2,7 +2,6 @@ package com.zaralynchisel.editioncore
 
 import com.zaralynchisel.renderengine.ChunkSurfaceReader
 import com.zaralynchisel.utils.Logger
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.InputStream
 import java.io.RandomAccessFile
@@ -30,21 +29,6 @@ class AnvilReader(private val regionFile: File) {
             val reader = AnvilReader(tempFile)
             reader.tempFile = tempFile
             return reader
-        }
-
-        private fun decodeHeightmap(longs: LongArray, bitsPerEntry: Int, entryCount: Int): IntArray {
-            val result = IntArray(entryCount)
-            for (i in result.indices) {
-                val bitOffset = i * bitsPerEntry
-                val longIndex = bitOffset / 64
-                val bitInLong = bitOffset % 64
-                var value = longs[longIndex] ushr bitInLong
-                if (bitInLong + bitsPerEntry > 64 && longIndex + 1 < longs.size) {
-                    value = value or (longs[longIndex + 1] shl (64 - bitInLong))
-                }
-                result[i] = (value and ((1L shl bitsPerEntry) - 1)).toInt()
-            }
-            return result
         }
     }
 
@@ -139,10 +123,10 @@ class AnvilReader(private val regionFile: File) {
      * Read the surface MapColor data for a chunk.
      * Returns 256-entry IntArray (z*16+x indexing) of MapColor IDs.
      */
-    fun readChunkSurface(localX: Int, localZ: Int): IntArray? {
+    fun readChunkSurface(localX: Int, localZ: Int, dimension: DimensionType = DimensionType.OVERWORLD): IntArray? {
         val data = readChunkData(localX, localZ) ?: return null
         return try {
-            val surface = ChunkSurfaceReader.readSurface(data)
+            val surface = ChunkSurfaceReader.readSurface(data, dimension)
             val result = IntArray(256)
             for (z in 0 until 16) {
                 for (x in 0 until 16) {
@@ -152,32 +136,6 @@ class AnvilReader(private val regionFile: File) {
             result
         } catch (e: Exception) {
             Logger.e("Failed to read chunk surface", e)
-            null
-        }
-    }
-
-    /**
-     * Read the heightmap (MOTION_BLOCKING) from chunk data.
-     * This is much faster than parsing all block states.
-     * Returns 256-entry height array (16×16 in row-major: z*16+x).
-     */
-    fun readChunkHeightmap(localX: Int, localZ: Int): IntArray? {
-        val data = readChunkData(localX, localZ) ?: return null
-        return try {
-            val reader = NbtReader(ByteArrayInputStream(data))
-            val (_, root) = reader.readRoot()
-            reader.close()
-
-            val heightmaps = root.getCompound("Heightmaps") ?: return null
-            val motionBlocking = heightmaps.getList("MOTION_BLOCKING") ?: return null
-            val longs = motionBlocking.value
-                .filterIsInstance<NbtReader.NbtTag.NbtLong>()
-                .map { it.value }
-                .toLongArray()
-
-            decodeHeightmap(longs, 9, 256)
-        } catch (e: Exception) {
-            Logger.e("Failed to read heightmap for ($localX, $localZ)", e)
             null
         }
     }

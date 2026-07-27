@@ -1,5 +1,6 @@
 package com.zaralynchisel.renderengine
 
+import com.zaralynchisel.editioncore.DimensionType
 import com.zaralynchisel.editioncore.NbtReader
 import com.zaralynchisel.editioncore.getCompound
 import com.zaralynchisel.editioncore.getInt
@@ -19,7 +20,13 @@ object ChunkSurfaceReader {
     /** Result: 16x16 array of MapColor IDs. 0 = no block (air/empty). */
     private var logCount = 0
 
-    fun readSurface(chunkNbt: ByteArray): Array<IntArray> {
+    /** How many blocks below the heightmap top to scan for a non-air surface block. */
+    private const val SURFACE_SCAN_DEPTH = 4
+
+    fun readSurface(
+        chunkNbt: ByteArray,
+        dimension: DimensionType = DimensionType.OVERWORLD
+    ): Array<IntArray> {
         val result = Array(16) { IntArray(16) { 0 } }
         val doLog = logCount < 3
         try {
@@ -27,73 +34,82 @@ object ChunkSurfaceReader {
             val (rootName, root) = reader.readRoot()
             reader.close()
 
-            if (doLog) Logger.i("ChunkSurface: rootTag=$rootName")
+            if (doLog) Logger.i("ChunkSurface: rootTag=$rootName dim=$dimension")
 
-            // Read heightmap (TAG_Long_Array in 1.18+, but some chunks may use TAG_List)
+            // World minimum Y. The overworld became -64 in 1.18 (DataVersion 2825+); the nether
+            // and end are 0. Heightmap values are stored relative to this minY (matches BlueMap,
+            // which adds dimensionType.getMinY() when reading heightmaps).
+            val dataVersion = root.getInt("DataVersion", 0)
+            val worldMinY = when (dimension) {
+                DimensionType.OVERWORLD -> if (dataVersion >= 2825) -64 else 0
+                DimensionType.NETHER -> 0
+                DimensionType.END -> 0
+            }
+
+            // Read heightmap. MOTION_BLOCKING is a TAG_Long_Array in all modern chunk formats.
             val heightmapsCompound = root.getCompound("Heightmaps")
             val usingRoot = heightmapsCompound == null
             val heightmaps = heightmapsCompound ?: root
-            var motionBlocking = heightmaps.getLongArray("MOTION_BLOCKING")
+            val motionBlocking = heightmaps.getLongArray("MOTION_BLOCKING")
 
             if (doLog) {
                 val keys = heightmaps.value.keys.take(10).joinToString(",")
                 Logger.i("ChunkSurface: usingRoot=$usingRoot hmKeys=[$keys] mbLongArray=${motionBlocking != null}")
             }
-            var heights: LongArray? = null
-            if (motionBlocking != null) {
-                heights = decodeHeightmap(motionBlocking, 9, 256)
-            } else {
-                // Fallback: try TAG_List (pre-1.18 chunk format)
-                val mbList = heightmaps.getList("MOTION_BLOCKING")
-                if (mbList != null) {
-                    if (doLog) Logger.i("ChunkSurface: MOTION_BLOCKING is TAG_List, not TAG_Long_Array — decoding from list")
-                    val longs = mbList.value
-                        .filterIsInstance<NbtReader.NbtTag.NbtLong>()
-                        .map { it.value }
-                        .toLongArray()
-                    motionBlocking = longs
-                    heights = decodeHeightmap(longs, 9, 256)
-                }
+            // Heightmap entries are 9 bits for standard dimensions (worldHeight <= 384).
+            // Convert to absolute surface-block Y per column. The stored value is relative to
+            // worldMinY and points at the first non-blocking block above the surface, so the
+            // surface block is at (stored + worldMinY - 1).
+            val heightsAbs: IntArray? = motionBlocking?.let { mb ->
+                val rel = decodeHeightmap(mb, 9, 256)
+                IntArray(256) { i -> rel[i].toInt() + worldMinY - 1 }
             }
 
-            if (doLog && heights != null) {
-                Logger.i("ChunkSurface: heights decoded, sample[0..4]=${heights.take(5).joinToString()}")
+            if (doLog && heightsAbs != null) {
+                Logger.i("ChunkSurface: heights decoded, sample[0..4]=${heightsAbs.take(5).joinToString()}")
             }
 
             // Read sections to get block at each surface position
-            val sections = root.getList("sections") ?: return heightGradient(heights)
+            val sections = root.getList("sections") ?: return heightGradient(heightsAbs)
             val sectionList = sections.value
                 .filterIsInstance<NbtReader.NbtTag.NbtCompound>()
                 .sortedBy { it.getInt("Y") }
 
-            if (sectionList.isEmpty()) return heightGradient(heights)
+            if (sectionList.isEmpty()) return heightGradient(heightsAbs)
 
+            val sectionByY = sectionList.associateBy { it.getInt("Y") }
             val sectionsDesc = sectionList.sortedByDescending { it.getInt("Y") }
 
             if (doLog) {
                 val status = root.getString("Status", "?")
-                Logger.i("ChunkSurface: sections=${sectionList.size} sectionYs=${sectionList.take(3).map { it.getInt("Y") }}..${sectionList.takeLast(3).map { it.getInt("Y") }} status=$status")
+                Logger.i("ChunkSurface: sections=${sectionList.size} worldMinY=$worldMinY sectionYs=${sectionList.take(3).map { it.getInt("Y") }}..${sectionList.takeLast(3).map { it.getInt("Y") }} status=$status")
             }
 
             // For each column
             for (x in 0 until 16) {
                 for (z in 0 until 16) {
-                    if (heights != null) {
+                    if (heightsAbs != null) {
                         val index = z * 16 + x
-                        val surfaceY = heights[index].toInt()
-                        val sectionIndex = surfaceY shr 4
-                        val section = sectionList.find { it.getInt("Y") == sectionIndex }
-                            ?: continue
-                        val blockY = surfaceY and 15
-                        val blockState = parseBlockAt(section, x, blockY, z)
-                        result[x][z] = MapColorPalette.getMapColorId(blockState)
+                        val topY = heightsAbs[index].coerceAtLeast(worldMinY)
+                        // Scan down a few blocks to robustly resolve the topmost non-air block
+                        // (absorbs any +/-1 ambiguity in the heightmap definition).
+                        for (dy in 0 until SURFACE_SCAN_DEPTH) {
+                            val y = topY - dy
+                            if (y < worldMinY) break
+                            val section = sectionByY[y shr 4] ?: continue
+                            val blockY = y and 15
+                            val cid = MapColorPalette.getMapColorId(parseBlockAt(section, x, blockY, z))
+                            if (cid > 0) {
+                                result[x][z] = cid
+                                break
+                            }
+                        }
                     } else {
-                        // ponytail: no heightmap → scan sections top-down
+                        // No heightmap → scan sections top-down for the first non-air block.
                         for (section in sectionsDesc) {
                             var found = false
                             for (y in 15 downTo 0) {
-                                val blockState = parseBlockAt(section, x, y, z)
-                                val cid = MapColorPalette.getMapColorId(blockState)
+                                val cid = MapColorPalette.getMapColorId(parseBlockAt(section, x, y, z))
                                 if (cid > 0) {
                                     result[x][z] = cid
                                     found = true
@@ -118,14 +134,14 @@ object ChunkSurfaceReader {
     }
 
     /**
-     * Fallback: gradient based on height only.
+     * Fallback: gradient based on absolute height only.
      */
-    private fun heightGradient(heights: LongArray?): Array<IntArray> {
+    private fun heightGradient(heightsAbs: IntArray?): Array<IntArray> {
         val result = Array(16) { IntArray(16) }
-        if (heights == null) return result
+        if (heightsAbs == null) return result
         for (x in 0 until 16) {
             for (z in 0 until 16) {
-                val h = heights[z * 16 + x].toInt()
+                val h = heightsAbs[z * 16 + x]
                 // Map height to color: low=plant(7), mid=grass(1), higher=dirt(10), high=stone(11), top=snow(8)
                 result[x][z] = when {
                     h < 55 -> 7   // deep / plant
@@ -163,53 +179,44 @@ object ChunkSurfaceReader {
             return entry?.getString("Name") ?: "air"
         }
 
-        // Decode palette index from packed long array
+        // Decode palette index from packed long array.
+        // Modern (1.16+) chunk sections use per-long packing: each 64-bit long holds
+        // floor(64/bits) entries and entries never span long boundaries (matches BlueMap's
+        // PackedIntArrayAccess). This is NOT a continuous bitstream.
         val bitsPerEntry = maxOf(4, 32 - Integer.numberOfLeadingZeros(palette.value.size - 1))
-        val blockIndex = y * 256 + z * 16 + x  // Within 16x16x16 section
-        val paletteIndex = readBits(data, blockIndex, bitsPerEntry).toInt()
+        val blockIndex = y * 256 + z * 16 + x  // Within 16x16x16 section (YZX ordering)
+        val paletteIndex = readPackedLong(data, blockIndex, bitsPerEntry)
 
-        if (paletteIndex >= palette.value.size) return "air"
+        if (paletteIndex < 0 || paletteIndex >= palette.value.size) return "air"
         val entry = palette.value[paletteIndex] as? NbtReader.NbtTag.NbtCompound
         return entry?.getString("Name") ?: "air"
     }
 
     /**
-     * Decode packed heightmap long array.
-     * MOTION_BLOCKING stores entries per-long with no cross-long overflow:
-     * each 64-bit long holds entriesPerLong = 64/bitsPerEntry entries
-     * (e.g. 9-bit entries → 7 per long, 63 used bits + 1 zero pad).
-     * This is DIFFERENT from the continuous bitstream used in block_states.
+     * Read a value from a per-long packed array (the format used by both heightmaps and
+     * block_states in 1.16+ chunks). Each 64-bit long holds `floor(64/bits)` entries and
+     * entries never span long boundaries; leftover high bits of the last entry slot in each
+     * long are unused.
      */
-    private fun decodeHeightmap(longs: LongArray, bitsPerEntry: Int, entryCount: Int): LongArray {
-        val result = LongArray(entryCount)
+    private fun readPackedLong(longs: LongArray, index: Int, bitsPerEntry: Int): Int {
+        if (bitsPerEntry <= 0 || bitsPerEntry > 64) return 0
         val entriesPerLong = 64 / bitsPerEntry
-        val mask = (1L shl bitsPerEntry) - 1
-        for (longIdx in longs.indices) {
-            val base = longIdx * entriesPerLong
-            for (entryIdx in 0 until entriesPerLong) {
-                val globalIdx = base + entryIdx
-                if (globalIdx >= entryCount) break
-                result[globalIdx] = (longs[longIdx] ushr (entryIdx * bitsPerEntry)) and mask
-            }
-        }
-        return result
+        if (entriesPerLong <= 0) return 0
+        val storageIndex = index / entriesPerLong
+        if (storageIndex < 0 || storageIndex >= longs.size) return 0
+        val offset = (index - storageIndex * entriesPerLong) * bitsPerEntry
+        val mask = (1L shl bitsPerEntry) - 1L
+        return ((longs[storageIndex] ushr offset) and mask).toInt()
     }
 
     /**
-     * Read a value at given index from a packed long array with specified bits per entry.
+     * Decode a packed heightmap long array (per-long packing, see [readPackedLong]).
      */
-    private fun readBits(longs: LongArray, index: Int, bitsPerEntry: Int): Long {
-        val bitOffset = index * bitsPerEntry
-        val longIndex = bitOffset / 64
-        val bitInLong = bitOffset % 64
-
-        if (longIndex >= longs.size) return 0
-
-        var value = longs[longIndex] ushr bitInLong
-        if (bitInLong + bitsPerEntry > 64 && longIndex + 1 < longs.size) {
-            val nextBits = longs[longIndex + 1] shl (64 - bitInLong)
-            value = value or (nextBits and ((1L shl bitsPerEntry) - 1))
+    private fun decodeHeightmap(longs: LongArray, bitsPerEntry: Int, entryCount: Int): LongArray {
+        val result = LongArray(entryCount)
+        for (i in 0 until entryCount) {
+            result[i] = readPackedLong(longs, i, bitsPerEntry).toLong()
         }
-        return value and ((1L shl bitsPerEntry) - 1)
+        return result
     }
 }

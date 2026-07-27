@@ -236,7 +236,7 @@ class WorldSelector(private val context: Context) {
                 val reader = cachedReader!!
                 val lx = chunkX and 31
                 val lz = chunkZ and 31
-                val result = reader.readChunkSurface(lx, lz)
+                val result = reader.readChunkSurface(lx, lz, dimension)
                 // ponytail: keep reader open for next same-region chunk
                 if (result != null) {
                     val nonZeroCount = result.count { it != 0 }

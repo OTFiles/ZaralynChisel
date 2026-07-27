@@ -193,8 +193,10 @@ class GodMapRenderer {
         rect: RectF
     ) {
         val colors = chunk.surfaceColors ?: return
-        // Build or retrieve cached bitmap
-        val bitmap = chunkSurfaceCache.getOrPut(Pair(chunk.x, chunk.z)) {
+        // Build or retrieve cached bitmap (keyed by dimension + chunk coords so chunks
+        // from different dimensions never share a surface bitmap).
+        val cacheKey = Triple(chunk.dimension.ordinal, chunk.x, chunk.z)
+        val bitmap = chunkSurfaceCache.getOrPut(cacheKey) {
             Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
         }
         val pixels = IntArray(256)
@@ -210,7 +212,7 @@ class GodMapRenderer {
         canvas.drawBitmap(bitmap, src, dst, null)
     }
 
-    private val chunkSurfaceCache = mutableMapOf<Pair<Int, Int>, Bitmap>()
+    private val chunkSurfaceCache = mutableMapOf<Triple<Int, Int, Int>, Bitmap>()
 
     /**
      * Terrain-simulated color based on chunk coordinates and dimension.
