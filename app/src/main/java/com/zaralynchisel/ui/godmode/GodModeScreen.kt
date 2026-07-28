@@ -74,6 +74,28 @@ fun GodModeScreen(
         }
     }
 
+    /**
+     * Center the view on actual generated/played terrain instead of spawn.
+     * Server/NeoForge saves commonly have "structure_starts" stubs (no terrain)
+     * around spawn; the most recently modified overworld chunk reliably lies
+     * inside the generated area. Falls back to spawn when no chunks/timestamps.
+     */
+    fun centerOnGeneratedTerrain(allChunks: List<ChunkInfo>, info: WorldData) {
+        val overworld = allChunks.filter { it.dimension == DimensionType.OVERWORLD }
+        // The most recently modified chunks lie in the actually-played (generated) area.
+        // Center on the centroid of the newest chunks so the view opens on real terrain.
+        val recent = overworld.sortedByDescending { it.timestamp }.take(64)
+        if (recent.isNotEmpty() && recent.first().timestamp > 0) {
+            viewX = recent.map { it.x }.average().toFloat()
+            viewZ = recent.map { it.z }.average().toFloat()
+            Logger.i("Centered on newest-terrain centroid (${viewX.toInt()},${viewZ.toInt()}) from ${recent.size} chunks")
+        } else {
+            viewX = info.spawnX / 16f
+            viewZ = info.spawnZ / 16f
+            Logger.i("Centered on spawn (${info.spawnX},${info.spawnZ})")
+        }
+    }
+
     // Load surface data for VISIBLE chunks only (viewport-based)
     LaunchedEffect(worldPath, worldData, viewX, viewZ, zoom) {
         if (worldData == null || chunks.isEmpty()) return@LaunchedEffect
@@ -86,11 +108,17 @@ fun GodModeScreen(
         val minZ = viewZ.toInt() - viewRadius
         val maxZ = viewZ.toInt() + viewRadius
 
-        // Filter visible chunks without surface data
+        // Filter visible chunks without surface data, nearest to the view center first
+        // so the area the user is actually looking at fills in before outlying chunks.
+        val cx = viewX
+        val cz = viewZ
         val visible = chunks.filter { chunk ->
             !chunk.hasSurfaceData && !chunk.isEmpty &&
             chunk.dimension == currentDim &&
             chunk.x in minX..maxX && chunk.z in minZ..maxZ
+        }.sortedBy {
+            val dx = it.x - cx; val dz = it.z - cz
+            dx * dx + dz * dz
         }.take(30)
 
         if (visible.isEmpty()) return@LaunchedEffect
@@ -127,9 +155,7 @@ fun GodModeScreen(
             if (cached != null) {
                 worldData = cached.first
                 chunks = cached.second
-                // Center on spawn even when restoring from cache.
-                viewX = cached.first.spawnX / 16f
-                viewZ = cached.first.spawnZ / 16f
+                centerOnGeneratedTerrain(cached.second, cached.first)
                 Logger.i("Loaded ${chunks.size} chunks from cache")
                 isLoading = false
                 return@LaunchedEffect
@@ -138,11 +164,6 @@ fun GodModeScreen(
             val info = worldSelector.loadWorldInfo(worldPath)
             if (info != null) {
                 worldData = info
-                // Center the view on the world spawn so generated terrain is shown.
-                // Defaulting to (0,0) previously showed ungenerated "structure_starts"
-                // chunk stubs (all air), which rendered as uniform single-color blocks.
-                viewX = info.spawnX / 16f
-                viewZ = info.spawnZ / 16f
                 val allChunks = mutableListOf<ChunkInfo>()
                 for (dim in info.dimensionPaths.keys) {
                     val dimPath = info.dimensionPaths[dim] ?: continue
@@ -158,6 +179,10 @@ fun GodModeScreen(
                         ChunkInfo(1, 1, DimensionType.OVERWORLD)
                     )
                 }
+                // Center on generated/played terrain rather than spawn: many worlds
+                // (server/NeoForge saves) have "structure_starts" stubs around spawn
+                // with no terrain, so spawn would render as a blank screen.
+                centerOnGeneratedTerrain(chunks, info)
                 // Cache the result
                 WorldCache.put(worldPath, info, chunks)
                 Logger.i("Loaded ${chunks.size} chunks total")
