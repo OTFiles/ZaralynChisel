@@ -81,14 +81,21 @@ fun GodModeScreen(
      * inside the generated area. Falls back to spawn when no chunks/timestamps.
      */
     fun centerOnGeneratedTerrain(allChunks: List<ChunkInfo>, info: WorldData) {
-        val overworld = allChunks.filter { it.dimension == DimensionType.OVERWORLD }
-        // The most recently modified chunks lie in the actually-played (generated) area.
-        // Center on the centroid of the newest chunks so the view opens on real terrain.
-        val recent = overworld.sortedByDescending { it.timestamp }.take(64)
+        // Generated terrain = non-empty chunks (stubs are marked empty during scan by
+        // reading the chunk Status). Center on the centroid of the most-recently-modified
+        // generated overworld chunks so the view opens on real terrain, not the stub ring.
+        val generated = allChunks.filter {
+            it.dimension == DimensionType.OVERWORLD && !it.isEmpty
+        }
+        val recent = generated.sortedByDescending { it.timestamp }.take(64)
         if (recent.isNotEmpty() && recent.first().timestamp > 0) {
             viewX = recent.map { it.x }.average().toFloat()
             viewZ = recent.map { it.z }.average().toFloat()
-            Logger.i("Centered on newest-terrain centroid (${viewX.toInt()},${viewZ.toInt()}) from ${recent.size} chunks")
+            Logger.i("Centered on newest generated-terrain centroid (${viewX.toInt()},${viewZ.toInt()}) from ${recent.size}/${generated.size} chunks")
+        } else if (generated.isNotEmpty()) {
+            viewX = generated.map { it.x }.average().toFloat()
+            viewZ = generated.map { it.z }.average().toFloat()
+            Logger.i("Centered on generated-terrain centroid (${viewX.toInt()},${viewZ.toInt()}) from ${generated.size} chunks")
         } else {
             viewX = info.spawnX / 16f
             viewZ = info.spawnZ / 16f

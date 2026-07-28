@@ -179,6 +179,88 @@ class NbtReader(input: InputStream) {
         return String(bytes, Charsets.UTF_8)
     }
 
+    /**
+     * Skip the payload of a tag of the given type without materialising it.
+     * Used by [findStringField] to cheaply skip past heavy tags (e.g. sections /
+     * block_states) when only a scalar field is needed.
+     */
+    private fun skipTagPayload(type: TagType) {
+        when (type) {
+            TagType.TAG_BYTE -> dis.readByte()
+            TagType.TAG_SHORT -> dis.readShort()
+            TagType.TAG_INT -> dis.readInt()
+            TagType.TAG_LONG -> dis.readLong()
+            TagType.TAG_FLOAT -> dis.readFloat()
+            TagType.TAG_DOUBLE -> dis.readDouble()
+            TagType.TAG_BYTE_ARRAY -> {
+                val len = dis.readInt()
+                if (len > 0) skipFully(len)
+            }
+            TagType.TAG_STRING -> {
+                val len = dis.readUnsignedShort()
+                if (len > 0) skipFully(len)
+            }
+            TagType.TAG_LIST -> {
+                val elementType = TagType.fromId(dis.readByte())
+                val length = dis.readInt()
+                for (i in 0 until length) skipTagPayload(elementType)
+            }
+            TagType.TAG_COMPOUND -> {
+                while (true) {
+                    val t = TagType.fromId(dis.readByte())
+                    if (t == TagType.TAG_END) break
+                    readString() // name
+                    skipTagPayload(t)
+                }
+            }
+            TagType.TAG_INT_ARRAY -> {
+                val len = dis.readInt()
+                if (len > 0) skipFully(len * 4)
+            }
+            TagType.TAG_LONG_ARRAY -> {
+                val len = dis.readInt()
+                if (len > 0) skipFully(len * 8)
+            }
+            TagType.TAG_END -> { /* nothing */ }
+        }
+    }
+
+    /** Skip exactly n bytes, looping because InputStream.skip may under-read. */
+    private fun skipFully(n: Int) {
+        var remaining = n
+        val buf = SKIP_BUFFER.get() ?: ByteArray(8192).also { SKIP_BUFFER.set(it) }
+        while (remaining > 0) {
+            val toRead = minOf(remaining, buf.size)
+            val read = dis.read(buf, 0, toRead)
+            if (read <= 0) break
+            remaining -= read
+        }
+    }
+
+    private val SKIP_BUFFER = ThreadLocal<ByteArray?>()
+
+    /**
+     * Read the root compound and return the value of the first TAG_String field named
+     * [name], skipping all other tags. This avoids parsing the whole chunk (sections,
+     * block_states, …) so it is cheap — used to read a chunk's "Status".
+     * Returns null if the root is not a compound or the field is absent.
+     */
+    fun findStringField(name: String): String? {
+        val type = TagType.fromId(dis.readByte())
+        if (type != TagType.TAG_COMPOUND) return null
+        readString() // root name
+        while (true) {
+            val t = TagType.fromId(dis.readByte())
+            if (t == TagType.TAG_END) break
+            val fieldName = readString()
+            if (fieldName == name && t == TagType.TAG_STRING) {
+                return readString()
+            }
+            skipTagPayload(t)
+        }
+        return null
+    }
+
     fun close() {
         try {
             dis.close()
