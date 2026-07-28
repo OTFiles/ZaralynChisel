@@ -47,15 +47,6 @@ class GodMapRenderer {
         style = Paint.Style.STROKE
     }
 
-    private val chunkPresentPaint = Paint().apply {
-        style = Paint.Style.FILL
-    }
-
-    private val chunkEmptyPaint = Paint().apply {
-        color = 0x33444444.toInt()
-        style = Paint.Style.FILL
-    }
-
     /**
      * Render the god map view.
      * @param width Viewport width in pixels
@@ -83,9 +74,19 @@ class GodMapRenderer {
         val offsetX = centerX - config.viewX * scaledChunkSize
         val offsetZ = centerZ - config.viewZ * scaledChunkSize
 
-        // Draw chunks
+        // Draw chunks. Following mcasaenk's ChunkRenderer: only real surface block
+        // data is drawn; empty / not-yet-loaded / all-air chunks are left transparent
+        // (they show the void background) instead of being filled with a fake solid
+        // color — that fake fill was why every chunk appeared as a single uniform color.
         var visibleCount = 0
         for (chunk in chunks) {
+            // Skip ungenerated / all-air chunks entirely (transparent, like mcasaenk).
+            if (chunk.isEmpty) continue
+            // No surface data loaded yet → don't fabricate a color; wait for the async loader.
+            if (!chunk.hasSurfaceData) continue
+            // Surface detail is only visible when the chunk is large enough on screen.
+            if (scaledChunkSize < 0.5f) continue
+
             val screenX = chunk.x * scaledChunkSize + offsetX
             val screenZ = chunk.z * scaledChunkSize + offsetZ
 
@@ -98,17 +99,7 @@ class GodMapRenderer {
             visibleCount++
 
             val rect = RectF(screenX, screenZ, screenX + scaledChunkSize, screenZ + scaledChunkSize)
-
-            if (chunk.isEmpty) {
-                canvas.drawRect(rect, chunkEmptyPaint)
-            } else if (scaledChunkSize >= 0.5f && chunk.hasSurfaceData) {
-                // Render 16×16 pixel surface data
-                drawChunkSurface(canvas, chunk, rect)
-            } else {
-                // Fallback: terrain-based solid color
-                chunkPresentPaint.color = terrainColor(chunk.x, chunk.z, chunk.averageHeight, chunk.dimension)
-                canvas.drawRect(rect, chunkPresentPaint)
-            }
+            drawChunkSurface(canvas, chunk, rect)
         }
 
         // Draw grid lines
@@ -213,66 +204,4 @@ class GodMapRenderer {
     }
 
     private val chunkSurfaceCache = mutableMapOf<Triple<Int, Int, Int>, Bitmap>()
-
-    /**
-     * Terrain-simulated color based on chunk coordinates and dimension.
-     * Uses value noise to produce terrain-like coloring:
-     * - Low areas: green (grass)
-     * - Mid elevations: brown (dirt/hills)
-     * - High elevations: gray (stone/mountains)
-     * - Very high: white (snow)
-     */
-    private fun terrainColor(x: Int, z: Int, height: Int, dimension: com.zaralynchisel.editioncore.DimensionType): Int {
-        // Use actual height if available
-        val h = if (height > 0) {
-            height.toFloat()
-        } else {
-            // Simulated height from value noise
-            simulatedHeight(x, z, dimension)
-        }
-
-        return when {
-            dimension == com.zaralynchisel.editioncore.DimensionType.NETHER -> {
-                // Nether: dark red tones
-                val v = ((simulatedHeight(x, z, dimension) % 40 + 40) / 40f).coerceIn(0f, 1f)
-                val r = (140 + v * 60).toInt()
-                val g = (30 + v * 20).toInt()
-                val b = (30 + v * 10).toInt()
-                (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-            }
-            dimension == com.zaralynchisel.editioncore.DimensionType.END -> {
-                0xFFD4C898.toInt()  // End: pale yellow
-            }
-            // Overworld height-based coloring
-            h < 50 -> 0xFF4040FF.toInt()  // ocean blue (water)
-            h < 55 -> 0xFF3E7A28.toInt()  // deep green / river
-            h < 63 -> 0xFF7FB238.toInt()  // grass green (MapColor 1)
-            h < 68 -> 0xFF8F9C32.toInt()  // light grass
-            h < 75 -> 0xFF976D4D.toInt()  // brown / dirt (MapColor 10)
-            h < 90 -> 0xFF9D9D9D.toInt()  // stone gray
-            h < 110 -> 0xFFB0B0B0.toInt() // light stone
-            h < 130 -> 0xFFC8C8C8.toInt() // high mountain
-            else -> 0xFFE8E8E8.toInt()    // snow
-        }
-    }
-
-    /**
-     * Simple value noise for terrain simulation.
-     * Uses integer hash (Wang mix) to avoid repeating patterns.
-     */
-    private fun simulatedHeight(x: Int, z: Int, dimension: com.zaralynchisel.editioncore.DimensionType): Float {
-        val dimMix = when (dimension) {
-            com.zaralynchisel.editioncore.DimensionType.OVERWORLD -> 0
-            com.zaralynchisel.editioncore.DimensionType.NETHER -> 0x55555555
-            com.zaralynchisel.editioncore.DimensionType.END -> 0x33333333
-        }
-        // Integer hash function (Wang hash / xxHash-style mix)
-        var h = x * 374761393 + z * 668265263 + dimMix
-        h = (h xor (h ushr 13)) * 1274126177
-        h = h xor (h ushr 16)
-        // Map to 0..1 range
-        val v = ((h.toLong() and 0xFFFFFFFFL).toFloat()) / 4294967296f
-        val curved = (v - 0.5f) * 1.8f + 0.5f  // expand range slightly
-        return 40f + curved.coerceIn(0f, 1f) * 100f
-    }
 }

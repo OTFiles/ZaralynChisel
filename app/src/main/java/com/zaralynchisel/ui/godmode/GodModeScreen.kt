@@ -89,6 +89,7 @@ fun GodModeScreen(
         // Filter visible chunks without surface data
         val visible = chunks.filter { chunk ->
             !chunk.hasSurfaceData && !chunk.isEmpty &&
+            chunk.dimension == currentDim &&
             chunk.x in minX..maxX && chunk.z in minZ..maxZ
         }.take(30)
 
@@ -126,6 +127,9 @@ fun GodModeScreen(
             if (cached != null) {
                 worldData = cached.first
                 chunks = cached.second
+                // Center on spawn even when restoring from cache.
+                viewX = cached.first.spawnX / 16f
+                viewZ = cached.first.spawnZ / 16f
                 Logger.i("Loaded ${chunks.size} chunks from cache")
                 isLoading = false
                 return@LaunchedEffect
@@ -134,6 +138,11 @@ fun GodModeScreen(
             val info = worldSelector.loadWorldInfo(worldPath)
             if (info != null) {
                 worldData = info
+                // Center the view on the world spawn so generated terrain is shown.
+                // Defaulting to (0,0) previously showed ungenerated "structure_starts"
+                // chunk stubs (all air), which rendered as uniform single-color blocks.
+                viewX = info.spawnX / 16f
+                viewZ = info.spawnZ / 16f
                 val allChunks = mutableListOf<ChunkInfo>()
                 for (dim in info.dimensionPaths.keys) {
                     val dimPath = info.dimensionPaths[dim] ?: continue
@@ -356,7 +365,7 @@ fun GodModeScreen(
                         val result = renderer.render(
                             width = size.width.toInt(),
                             height = size.height.toInt(),
-                            chunks = chunks,
+                            chunks = chunks.filter { it.dimension == currentDim },
                             config = config
                         )
 

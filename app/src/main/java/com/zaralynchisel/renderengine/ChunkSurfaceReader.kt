@@ -23,11 +23,23 @@ object ChunkSurfaceReader {
     /** How many blocks below the heightmap top to scan for a non-air surface block. */
     private const val SURFACE_SCAN_DEPTH = 4
 
+    /** Per-column surface data: 16×16 MapColor IDs and absolute surface Y. */
+    class SurfaceData(
+        val colors: Array<IntArray>,   // [x][z] MapColor id (0 = air)
+        val heights: Array<IntArray>   // [x][z] absolute surface Y, Int.MIN_VALUE if none
+    )
+
     fun readSurface(
         chunkNbt: ByteArray,
         dimension: DimensionType = DimensionType.OVERWORLD
-    ): Array<IntArray> {
-        val result = Array(16) { IntArray(16) { 0 } }
+    ): Array<IntArray> = readSurfaceData(chunkNbt, dimension).colors
+
+    fun readSurfaceData(
+        chunkNbt: ByteArray,
+        dimension: DimensionType = DimensionType.OVERWORLD
+    ): SurfaceData {
+        val colors = Array(16) { IntArray(16) { 0 } }
+        val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
         val doLog = logCount < 3
         try {
             val reader = NbtReader(ByteArrayInputStream(chunkNbt))
@@ -100,7 +112,8 @@ object ChunkSurfaceReader {
                             val blockY = y and 15
                             val cid = MapColorPalette.getMapColorId(parseBlockAt(section, x, blockY, z))
                             if (cid > 0) {
-                                result[x][z] = cid
+                                colors[x][z] = cid
+                                heights[x][z] = y
                                 break
                             }
                         }
@@ -111,7 +124,8 @@ object ChunkSurfaceReader {
                             for (y in 15 downTo 0) {
                                 val cid = MapColorPalette.getMapColorId(parseBlockAt(section, x, y, z))
                                 if (cid > 0) {
-                                    result[x][z] = cid
+                                    colors[x][z] = cid
+                                    heights[x][z] = section.getInt("Y") * 16 + y
                                     found = true
                                     break
                                 }
@@ -122,37 +136,39 @@ object ChunkSurfaceReader {
                 }
             }
             // Log sample of parsed surface
-            val sample = listOf(result[0][0], result[8][0], result[0][8], result[15][15], result[8][8])
-            val nonZero = result.sumOf { row -> row.count { it > 0 } }
+            val sample = listOf(colors[0][0], colors[8][0], colors[0][8], colors[15][15], colors[8][8])
+            val nonZero = colors.sumOf { row -> row.count { it > 0 } }
             if (doLog) Logger.i("ChunkSurface: sample=$sample nonZeroCells=$nonZero/256")
             logCount++
 
         } catch (e: Exception) {
             Logger.e("Failed to read chunk surface", e)
         }
-        return result
+        return SurfaceData(colors, heights)
     }
 
     /**
-     * Fallback: gradient based on absolute height only.
+     * Fallback: gradient based on absolute height only (heights unknown).
      */
-    private fun heightGradient(heightsAbs: IntArray?): Array<IntArray> {
-        val result = Array(16) { IntArray(16) }
-        if (heightsAbs == null) return result
+    private fun heightGradient(heightsAbs: IntArray?): SurfaceData {
+        val colors = Array(16) { IntArray(16) }
+        val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
+        if (heightsAbs == null) return SurfaceData(colors, heights)
         for (x in 0 until 16) {
             for (z in 0 until 16) {
                 val h = heightsAbs[z * 16 + x]
                 // Map height to color: low=plant(7), mid=grass(1), higher=dirt(10), high=stone(11), top=snow(8)
-                result[x][z] = when {
+                colors[x][z] = when {
                     h < 55 -> 7   // deep / plant
                     h < 64 -> 1   // grass level
                     h < 75 -> 10  // dirt / hills
                     h < 100 -> 11 // stone / mountains
                     else -> 8     // snow peaks
                 }
+                heights[x][z] = h
             }
         }
-        return result
+        return SurfaceData(colors, heights)
     }
 
     /**

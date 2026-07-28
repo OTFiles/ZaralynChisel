@@ -31,9 +31,15 @@ fun PlayerModeScreen(
     worldPath: String,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
     val hasKeyboard = configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY
+
+    val app = context.applicationContext as com.zaralynchisel.ZaralynChiselApp
+    val worldSelector = remember {
+        com.zaralynchisel.fileaccess.WorldSelector(context).also { it.safAccess = app.safAccess }
+    }
 
     var textureAvailable by remember { mutableStateOf(true) }
     var showHud by remember { mutableStateOf(true) }
@@ -41,12 +47,23 @@ fun PlayerModeScreen(
     var showChunkGrid by remember { mutableStateOf(false) }
     var showWASD by remember { mutableStateOf(true) }
 
-    // Player state
+    // Player state — positioned at world spawn once level.dat is read.
     var posX by remember { mutableFloatStateOf(0f) }
-    var posY by remember { mutableFloatStateOf(64f) }
+    var posY by remember { mutableFloatStateOf(80f) }
     var posZ by remember { mutableFloatStateOf(0f) }
     var yaw by remember { mutableFloatStateOf(0f) }
     var pitch by remember { mutableFloatStateOf(0f) }
+
+    // Resolve spawn from level.dat so the player starts above generated terrain
+    // (starting at 0,0 previously dropped the player into ungenerated/empty chunks).
+    LaunchedEffect(worldPath) {
+        val info = worldSelector.loadWorldInfo(worldPath)
+        if (info != null) {
+            posX = info.spawnX.toFloat() + 0.5f
+            posZ = info.spawnZ.toFloat() + 0.5f
+            posY = 82f
+        }
+    }
 
     // Continuous movement via WASD (held down = repeated move)
     var moveForward by remember { mutableStateOf(false) }
@@ -217,7 +234,14 @@ fun PlayerModeScreen(
                 factory = { ctx ->
                     GLSurfaceView(ctx).apply {
                         setEGLContextClientVersion(3)
-                        val renderer = PlayerRenderer()
+                        val renderer = PlayerRenderer(
+                            worldPath = worldPath,
+                            spawnX = posX.toInt(),
+                            spawnY = posY.toInt(),
+                            spawnZ = posZ.toInt(),
+                            dimension = com.zaralynchisel.editioncore.DimensionType.OVERWORLD,
+                            worldSelector = worldSelector
+                        )
                         renderer.viewConfig.showChunkGrid = showChunkGrid
                         renderer.updateCamera(posX, posY, posZ, yaw, pitch)
                         setRenderer(renderer)

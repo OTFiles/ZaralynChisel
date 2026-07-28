@@ -256,6 +256,45 @@ class WorldSelector(private val context: Context) {
         }
     }
 
+    /**
+     * Load surface MapColor data + per-column absolute surface Y for a single chunk.
+     * Used by the 3D player renderer. Returns null on failure.
+     */
+    suspend fun loadChunkSurfaceAndHeight(
+        worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType
+    ): com.zaralynchisel.renderengine.ChunkSurfaceReader.SurfaceData? {
+        return withFileIO {
+            try {
+                val regionDir = File(worldPath, dimension.folderName)
+                val regionX = chunkX shr 5
+                val regionZ = chunkZ shr 5
+                val regionFile = File(regionDir, "r.$regionX.$regionZ.mca")
+                if (!regionFile.exists()) return@withFileIO null
+
+                val regionKey = (regionX.toLong() shl 32) or (regionZ.toLong() and 0xFFFFFFFFL)
+                if (cachedRegionIdx != regionKey || cachedReader == null) {
+                    cachedReader?.close(); cachedReader = null
+                    val stream = if (safAccess != null) {
+                        val relPath = "${dimension.folderName}/r.$regionX.$regionZ.mca"
+                        safAccess!!.openInputStream(relPath, regionFile)
+                    } else if (regionFile.exists()) {
+                        java.io.BufferedInputStream(java.io.FileInputStream(regionFile))
+                    } else null
+                    if (stream == null) return@withFileIO null
+                    cachedReader = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
+                    cachedReader!!.open()
+                    cachedRegionIdx = regionKey
+                }
+                val reader = cachedReader!!
+                val data = reader.readChunkData(chunkX and 31, chunkZ and 31) ?: return@withFileIO null
+                ChunkSurfaceReader.readSurfaceData(data, dimension)
+            } catch (e: Exception) {
+                Logger.e("Failed to load surface+height for ($chunkX, $chunkZ)", e)
+                null
+            }
+        }
+    }
+
     fun rememberWorld(worldPath: String) {
         prefs.addRecentWorld(worldPath)
     }

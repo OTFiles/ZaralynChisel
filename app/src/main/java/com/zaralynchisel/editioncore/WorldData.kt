@@ -29,8 +29,16 @@ enum class DimensionType(val folderName: String) {
 
     companion object {
         fun fromFolder(path: String): DimensionType? {
-            return entries.firstOrNull { dim ->
-                path.contains("/${dim.folderName}", ignoreCase = false)
+            // Match the most specific dimension first. The previous implementation checked
+            // OVERWORLD ("region") before NETHER/END, so a path like ".../DIM-1/region"
+            // matched OVERWORLD's "/region" substring and every nether/end chunk was
+            // misclassified as overworld (wrong minY, wrong palette assumptions).
+            val normalized = path.replace('\\', '/')
+            return when {
+                normalized.contains("/DIM-1/") -> NETHER
+                normalized.contains("/DIM1/") -> END
+                normalized.contains("/region") -> OVERWORLD
+                else -> null
             }
         }
     }
