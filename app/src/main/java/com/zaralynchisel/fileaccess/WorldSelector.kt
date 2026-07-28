@@ -3,6 +3,7 @@ package com.zaralynchisel.fileaccess
 import android.content.Context
 import android.net.Uri
 import com.zaralynchisel.editioncore.*
+import com.zaralynchisel.renderengine.ChunkSurfaceReader
 import com.zaralynchisel.utils.Logger
 import com.zaralynchisel.utils.PreferenceManager
 import com.zaralynchisel.utils.withFileIO

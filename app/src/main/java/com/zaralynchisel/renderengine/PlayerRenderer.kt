@@ -189,7 +189,7 @@ class PlayerRenderer(
                 val z = cz + dz
                 val key = chunkKey(x, z)
                 desired.add(key)
-                if (key !in meshes && key !in loading && loading.size < 8) {
+                if (!meshes.containsKey(key) && !loading.contains(key) && loading.size < 8) {
                     loading.add(key)
                     scope.launch { loadChunk(x, z, key) }
                 }
