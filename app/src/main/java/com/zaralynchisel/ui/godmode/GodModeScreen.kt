@@ -29,6 +29,7 @@ import com.zaralynchisel.fileaccess.WorldCache
 import com.zaralynchisel.renderengine.GodMapRenderer
 import com.zaralynchisel.ZaralynChiselApp
 import com.zaralynchisel.utils.Logger
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -112,53 +113,62 @@ fun GodModeScreen(
     }
 
     // Load surface data for VISIBLE chunks only (viewport-based)
-    LaunchedEffect(worldPath, worldData, viewX, viewZ, zoom) {
-        if (worldData == null || chunks.isEmpty()) return@LaunchedEffect
+    // Surface loader: a persistent loop keyed only on the world, NOT on view/zoom.
+    // Keying on viewX/viewZ/zoom cancelled the coroutine mid-batch on every pan
+    // gesture, so `chunks = updatedChunks` was never reached and the renderer always
+    // saw withSurface=0. Instead we poll the current view each iteration and load a
+    // batch of the nearest not-yet-loaded chunks; panning just changes which chunks
+    // the next iteration picks up, without cancelling the load in flight.
+    LaunchedEffect(worldPath, worldData) {
+        if (worldData == null) return@LaunchedEffect
         val worldPathLocal = worldPath
+        while (isActive) {
+            if (chunks.isEmpty()) { delay(100); continue }
+            val curDim = currentDim
+            val cx = viewX
+            val cz = viewZ
+            val viewRadius = (200f / zoom).toInt().coerceIn(10, 500)
+            val minX = viewX.toInt() - viewRadius
+            val maxX = viewX.toInt() + viewRadius
+            val minZ = viewZ.toInt() - viewRadius
+            val maxZ = viewZ.toInt() + viewRadius
 
-        // Determine visible chunk range
-        val viewRadius = (200f / zoom).toInt().coerceIn(10, 500)
-        val minX = viewX.toInt() - viewRadius
-        val maxX = viewX.toInt() + viewRadius
-        val minZ = viewZ.toInt() - viewRadius
-        val maxZ = viewZ.toInt() + viewRadius
+            val visible = chunks.filter { chunk ->
+                !chunk.hasSurfaceData && !chunk.isEmpty &&
+                chunk.dimension == curDim &&
+                chunk.x in minX..maxX && chunk.z in minZ..maxZ
+            }.sortedBy {
+                val dx = it.x - cx; val dz = it.z - cz
+                dx * dx + dz * dz
+            }.take(30)
 
-        // Filter visible chunks without surface data, nearest to the view center first
-        // so the area the user is actually looking at fills in before outlying chunks.
-        val cx = viewX
-        val cz = viewZ
-        val visible = chunks.filter { chunk ->
-            !chunk.hasSurfaceData && !chunk.isEmpty &&
-            chunk.dimension == currentDim &&
-            chunk.x in minX..maxX && chunk.z in minZ..maxZ
-        }.sortedBy {
-            val dx = it.x - cx; val dz = it.z - cz
-            dx * dx + dz * dz
-        }.take(30)
+            if (visible.isEmpty()) { delay(150); continue }
 
-        if (visible.isEmpty()) return@LaunchedEffect
-
-        var loaded = 0; var failed = 0
-        val updatedChunks = chunks.toMutableList()
-        for (chunk in visible) {
-            val surface = worldSelector.loadChunkSurface(
-                worldPathLocal, chunk.x, chunk.z, chunk.dimension
-            )
-            if (surface != null) {
-                loaded++
-                val idx = updatedChunks.indexOf(chunk)
-                if (idx >= 0) {
-                    val allZero = !surface.any { it != 0 } // ponytail: structure_starts chunks = all air
-                    updatedChunks[idx] = chunk.copy(
-                        surfaceColors = surface,
-                        averageHeight = surface.average().toInt(),
-                        isEmpty = chunk.isEmpty || allZero
-                    )
-                }
-            } else { failed++ }
+            var loaded = 0; var failed = 0
+            val updatedChunks = chunks.toMutableList()
+            for (chunk in visible) {
+                val surface = worldSelector.loadChunkSurface(
+                    worldPathLocal, chunk.x, chunk.z, chunk.dimension
+                )
+                if (surface != null) {
+                    loaded++
+                    val idx = updatedChunks.indexOf(chunk)
+                    if (idx >= 0) {
+                        val allZero = !surface.any { it != 0 }
+                        updatedChunks[idx] = chunk.copy(
+                            surfaceColors = surface,
+                            averageHeight = surface.average().toInt(),
+                            isEmpty = chunk.isEmpty || allZero
+                        )
+                    }
+                } else { failed++ }
+            }
+            Logger.i("Surface batch: loaded=$loaded failed=$failed totalVisible=${visible.size} totalWithSurface=${updatedChunks.count { it.hasSurfaceData }}/${updatedChunks.size} view=(${cx.toInt()},${cz.toInt()})")
+            chunks = updatedChunks
+            // Yield so recomposition (incl. surface data propagation to the Canvas)
+            // can happen between batches, and so we don't starve the main thread.
+            delay(50)
         }
-        Logger.i("Surface batch: loaded=$loaded failed=$failed totalVisible=${visible.size} totalWithSurface=${updatedChunks.count { it.hasSurfaceData }}/${updatedChunks.size}")
-        chunks = updatedChunks
     }
 
     // Load world data — use cache to avoid re-scanning
