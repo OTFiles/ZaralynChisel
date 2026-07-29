@@ -54,6 +54,10 @@ data class ChunkInfo(
     val timestamp: Long = 0L,
     val isEmpty: Boolean = false,
     val isCorrupted: Boolean = false,
+    /** Size of the chunk on disk in 4 KiB sectors (from the region header). Larger =
+     *  more generated content; "structure_starts" stubs are tiny (1 sector). Used to
+     *  locate generated terrain without parsing every chunk. */
+    val sectorCount: Int = 0,
     val blockCount: Int = 0,
     val averageHeight: Int = 0,
     /** 16×16 MapColor IDs for each column (index = z*16 + x). null if not loaded. */

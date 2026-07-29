@@ -2,7 +2,6 @@ package com.zaralynchisel.editioncore
 
 import com.zaralynchisel.renderengine.ChunkSurfaceReader
 import com.zaralynchisel.utils.Logger
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.InputStream
 import java.io.RandomAccessFile
@@ -137,24 +136,6 @@ class AnvilReader(private val regionFile: File) {
             result
         } catch (e: Exception) {
             Logger.e("Failed to read chunk surface", e)
-            null
-        }
-    }
-
-    /**
-     * Read a chunk's "Status" field (e.g. minecraft:full / structure_starts) without
-     * parsing the whole chunk. Used to tell generated terrain apart from empty
-     * structure-starts stubs during scanning.
-     */
-    fun readChunkStatus(localX: Int, localZ: Int): String? {
-        val data = readChunkData(localX, localZ) ?: return null
-        return try {
-            val reader = NbtReader(ByteArrayInputStream(data))
-            val status = reader.findStringField("Status")
-            reader.close()
-            status
-        } catch (e: Exception) {
-            Logger.e("Failed to read chunk status at ($localX, $localZ)", e)
             null
         }
     }

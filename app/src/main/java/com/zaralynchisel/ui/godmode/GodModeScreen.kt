@@ -81,21 +81,19 @@ fun GodModeScreen(
      * inside the generated area. Falls back to spawn when no chunks/timestamps.
      */
     fun centerOnGeneratedTerrain(allChunks: List<ChunkInfo>, info: WorldData) {
-        // Generated terrain = non-empty chunks (stubs are marked empty during scan by
-        // reading the chunk Status). Center on the centroid of the most-recently-modified
-        // generated overworld chunks so the view opens on real terrain, not the stub ring.
+        // Generated terrain is much larger on disk than empty "structure_starts"
+        // stubs: a full chunk is several 4 KiB sectors (block_states + heightmaps +
+        // biomes + block entities) while a stub is ~1 sector. sectorCount is read for
+        // free from the region header, so we can locate real terrain without parsing
+        // every chunk. Center on the centroid of the largest overworld chunks.
         val generated = allChunks.filter {
-            it.dimension == DimensionType.OVERWORLD && !it.isEmpty
+            it.dimension == DimensionType.OVERWORLD && it.sectorCount >= 2
         }
-        val recent = generated.sortedByDescending { it.timestamp }.take(64)
-        if (recent.isNotEmpty() && recent.first().timestamp > 0) {
-            viewX = recent.map { it.x }.average().toFloat()
-            viewZ = recent.map { it.z }.average().toFloat()
-            Logger.i("Centered on newest generated-terrain centroid (${viewX.toInt()},${viewZ.toInt()}) from ${recent.size}/${generated.size} chunks")
-        } else if (generated.isNotEmpty()) {
-            viewX = generated.map { it.x }.average().toFloat()
-            viewZ = generated.map { it.z }.average().toFloat()
-            Logger.i("Centered on generated-terrain centroid (${viewX.toInt()},${viewZ.toInt()}) from ${generated.size} chunks")
+        val biggest = generated.sortedByDescending { it.sectorCount }.take(64)
+        if (biggest.isNotEmpty()) {
+            viewX = biggest.map { it.x }.average().toFloat()
+            viewZ = biggest.map { it.z }.average().toFloat()
+            Logger.i("Centered on largest generated chunks (${viewX.toInt()},${viewZ.toInt()}) ${biggest.size}/${generated.size} overworld, maxSectors=${biggest.first().sectorCount}")
         } else {
             viewX = info.spawnX / 16f
             viewZ = info.spawnZ / 16f

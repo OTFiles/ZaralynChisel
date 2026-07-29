@@ -178,18 +178,12 @@ class WorldSelector(private val context: Context) {
                                 for (lz in 0 until 32) {
                                     val header = reader.readChunkHeader(lx, lz)
                                     if (header != null && header.sectorOffset > 0 && header.sectorCount > 0) {
-                                        // Read the chunk's Status to tell generated terrain
-                                        // apart from empty "structure_starts" stubs. Stub
-                                        // chunks (pre-noise) have no terrain and are skipped.
-                                        val status = reader.readChunkStatus(lx, lz)
-                                        val isStub = status != null &&
-                                            status in STUB_STATUSES
                                         chunks.add(ChunkInfo(
                                             x = (rx shl 5) + lx,
                                             z = (rz shl 5) + lz,
                                             dimension = dim,
                                             timestamp = header.timestamp,
-                                            isEmpty = isStub
+                                            sectorCount = header.sectorCount
                                         ))
                                     }
                                 }
@@ -347,15 +341,6 @@ class WorldSelector(private val context: Context) {
     companion object {
         private val RegionFileNameRegex = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
         private val REGION_FILE_REGEX = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
-
-        /** Chunk statuses that precede terrain generation ("noise"); these chunks have
-         *  no block_states terrain and are skipped like empty chunks. */
-        private val STUB_STATUSES = setOf(
-            "minecraft:empty", "empty",
-            "minecraft:structure_starts", "structure_starts",
-            "minecraft:structure_references", "structure_references",
-            "minecraft:biomes", "biomes"
-        )
 
         private val documentsContractCompat = object {
             fun getTreeDocumentId(uri: Uri): String =
