@@ -33,6 +33,10 @@ class AnvilReader(private val regionFile: File) {
             reader.tempFile = tempFile
             return reader
         }
+
+        /** Bytes of the NBT string "WORLD_SURFACE", present only in generated chunks
+         *  (heightmaps are populated at the "heightmaps" generation stage). */
+        private val WORLD_SURFACE_BYTES = "WORLD_SURFACE".toByteArray(Charsets.UTF_8)
     }
 
     /**
@@ -216,10 +220,4 @@ class AnvilReader(private val regionFile: File) {
         val sectorCount: Int,
         val timestamp: Long
     )
-
-    companion object {
-        /** Bytes of the NBT string "WORLD_SURFACE", present only in generated chunks
-         *  (heightmaps are populated at the "heightmaps" generation stage). */
-        private val WORLD_SURFACE_BYTES = "WORLD_SURFACE".toByteArray(Charsets.UTF_8)
-    }
 }
