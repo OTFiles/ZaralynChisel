@@ -402,12 +402,14 @@ fun GodModeScreen(
                             selectionArea = selection
                         )
 
+                        val drawChunks = chunks.filter { it.dimension == currentDim }
                         val result = renderer.render(
                             width = size.width.toInt(),
                             height = size.height.toInt(),
-                            chunks = chunks.filter { it.dimension == currentDim },
+                            chunks = drawChunks,
                             config = config
                         )
+                        com.zaralynchisel.utils.Logger.i("GodRender: w=${size.width.toInt()} h=${size.height.toInt()} dimChks=${drawChunks.size} withSurface=${drawChunks.count { it.hasSurfaceData }} notEmpty=${drawChunks.count { !it.isEmpty }} visible=${result.visibleChunks} view=(${config.viewX.toInt()},${config.viewZ.toInt()}) zoom=${config.zoom}")
 
                         // Draw the rendered bitmap
                         drawImage(
