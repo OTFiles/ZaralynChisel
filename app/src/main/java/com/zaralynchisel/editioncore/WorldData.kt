@@ -14,6 +14,12 @@ data class WorldData(
     val seed: Long = 0,
     val spawnX: Int = 0,
     val spawnZ: Int = 0,
+    /** Player's last known position from level.dat Data.Player.Pos, or null if the
+     *  save has no Player tag (e.g. a server world with separate playerdata). The
+     *  player stands in actually-played (generated) terrain, so this is the best
+     *  place to center the map view. */
+    val playerX: Double? = null,
+    val playerZ: Double? = null,
     val lastPlayed: Long = 0L,
     val levelData: Map<String, Any?> = emptyMap()
 )
@@ -58,10 +64,6 @@ data class ChunkInfo(
      *  more generated content; "structure_starts" stubs are tiny (1 sector). Used to
      *  locate generated terrain without parsing every chunk. */
     val sectorCount: Int = 0,
-    /** For a sampled subset of chunks, whether the chunk actually has generated
-     *  terrain (detected by scanning decompressed bytes for a heightmap marker).
-     *  null = not sampled (unknown). Used to center the view on real terrain. */
-    val hasTerrain: Boolean? = null,
     val blockCount: Int = 0,
     val averageHeight: Int = 0,
     /** 16×16 MapColor IDs for each column (index = z*16 + x). null if not loaded. */

@@ -81,22 +81,33 @@ fun GodModeScreen(
      * inside the generated area. Falls back to spawn when no chunks/timestamps.
      */
     fun centerOnGeneratedTerrain(allChunks: List<ChunkInfo>, info: WorldData) {
-        // During scan we cheaply sampled the largest chunk(s) per region and detected
-        // real terrain by scanning decompressed bytes for a heightmap marker
-        // (WORLD_SURFACE). structure_starts stubs lack heightmaps, so hasTerrain==true
-        // reliably marks generated terrain. Center on the centroid of confirmed-terrain
-        // overworld chunks; fall back to spawn if none were found.
-        val terrain = allChunks.filter {
-            it.dimension == DimensionType.OVERWORLD && it.hasTerrain == true
-        }
-        if (terrain.isNotEmpty()) {
-            viewX = terrain.map { it.x }.average().toFloat()
-            viewZ = terrain.map { it.z }.average().toFloat()
-            Logger.i("Centered on confirmed terrain (${viewX.toInt()},${viewZ.toInt()}) from ${terrain.size} sampled terrain chunks")
-        } else {
-            viewX = info.spawnX / 16f
-            viewZ = info.spawnZ / 16f
-            Logger.i("No sampled terrain found; centered on spawn (${info.spawnX},${info.spawnZ})")
+        // Center on the chunk the player is actually standing in. The player stands in
+        // played (generated) terrain by definition, so this always opens the map on real
+        // terrain without any chunk-parsing heuristics. Fall back to spawn, then to the
+        // most-recently-modified overworld chunk if there's no Player tag (server saves).
+        when {
+            info.playerX != null && info.playerZ != null -> {
+                viewX = (info.playerX / 16.0).toFloat()
+                viewZ = (info.playerZ / 16.0).toFloat()
+                Logger.i("Centered on player chunk (${viewX.toInt()},${viewZ.toInt()}) pos=(${info.playerX},${info.playerZ})")
+            }
+            info.spawnX != 0 || info.spawnZ != 0 -> {
+                viewX = info.spawnX / 16f
+                viewZ = info.spawnZ / 16f
+                Logger.i("Centered on spawn (${info.spawnX},${info.spawnZ})")
+            }
+            else -> {
+                val overworld = allChunks.filter { it.dimension == DimensionType.OVERWORLD }
+                val recent = overworld.sortedByDescending { it.timestamp }.take(64)
+                if (recent.isNotEmpty() && recent.first().timestamp > 0) {
+                    viewX = recent.map { it.x }.average().toFloat()
+                    viewZ = recent.map { it.z }.average().toFloat()
+                    Logger.i("Centered on newest-terrain centroid (${viewX.toInt()},${viewZ.toInt()})")
+                } else {
+                    viewX = 0f; viewZ = 0f
+                    Logger.i("Centered on origin (0,0)")
+                }
+            }
         }
     }
 
