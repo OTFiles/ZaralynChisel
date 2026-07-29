@@ -58,6 +58,10 @@ data class ChunkInfo(
      *  more generated content; "structure_starts" stubs are tiny (1 sector). Used to
      *  locate generated terrain without parsing every chunk. */
     val sectorCount: Int = 0,
+    /** For a sampled subset of chunks, whether the chunk actually has generated
+     *  terrain (detected by scanning decompressed bytes for a heightmap marker).
+     *  null = not sampled (unknown). Used to center the view on real terrain. */
+    val hasTerrain: Boolean? = null,
     val blockCount: Int = 0,
     val averageHeight: Int = 0,
     /** 16×16 MapColor IDs for each column (index = z*16 + x). null if not loaded. */

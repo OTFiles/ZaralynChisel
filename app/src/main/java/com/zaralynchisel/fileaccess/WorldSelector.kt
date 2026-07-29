@@ -174,19 +174,41 @@ class WorldSelector(private val context: Context) {
                     val reader = AnvilReader.fromStream(stream)
                     if (reader.open()) {
                         try {
+                            // First pass: collect all headers so we can sample the largest
+                            // chunks per region for cheap terrain detection.
+                            val headers = ArrayList<AnvilReader.ChunkHeader>(1024)
                             for (lx in 0 until 32) {
                                 for (lz in 0 until 32) {
                                     val header = reader.readChunkHeader(lx, lz)
                                     if (header != null && header.sectorOffset > 0 && header.sectorCount > 0) {
-                                        chunks.add(ChunkInfo(
-                                            x = (rx shl 5) + lx,
-                                            z = (rz shl 5) + lz,
-                                            dimension = dim,
-                                            timestamp = header.timestamp,
-                                            sectorCount = header.sectorCount
-                                        ))
+                                        headers.add(header)
                                     }
                                 }
+                            }
+                            // Sample the largest chunks and detect real terrain by scanning
+                            // decompressed bytes for a heightmap marker (WORLD_SURFACE),
+                            // present only in post-noise chunks. ~5ms per sample, so we only
+                            // sample a few per region to stay fast.
+                            val terrainFlags = HashMap<Long, Boolean>()
+                            val samples = headers
+                                .sortedByDescending { it.sectorCount }
+                            for (h in samples) {
+                                val terrain = reader.hasTerrain(h.localX, h.localZ)
+                                terrainFlags[(h.localX.toLong() * 32L + h.localZ)] = terrain
+                                // Stop once we've found terrain in this region, or sampled 6.
+                                if (terrain) break
+                                if (terrainFlags.size >= 6) break
+                            }
+                            for (h in headers) {
+                                val key = (h.localX.toLong() * 32L + h.localZ)
+                                chunks.add(ChunkInfo(
+                                    x = (rx shl 5) + h.localX,
+                                    z = (rz shl 5) + h.localZ,
+                                    dimension = dim,
+                                    timestamp = h.timestamp,
+                                    sectorCount = h.sectorCount,
+                                    hasTerrain = terrainFlags[key]
+                                ))
                             }
                         } finally {
                             reader.close()

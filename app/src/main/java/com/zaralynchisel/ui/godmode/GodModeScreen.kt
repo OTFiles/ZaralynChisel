@@ -81,23 +81,22 @@ fun GodModeScreen(
      * inside the generated area. Falls back to spawn when no chunks/timestamps.
      */
     fun centerOnGeneratedTerrain(allChunks: List<ChunkInfo>, info: WorldData) {
-        // Generated terrain is much larger on disk than empty "structure_starts"
-        // stubs: a full chunk is several 4 KiB sectors (block_states + heightmaps +
-        // biomes + block entities) while a stub is ~1 sector. sectorCount is read for
-        // free from the region header, so we can locate real terrain without parsing
-        // every chunk. Center on the centroid of the largest overworld chunks.
-        val generated = allChunks.filter {
-            it.dimension == DimensionType.OVERWORLD && it.sectorCount >= 2
+        // During scan we cheaply sampled the largest chunk(s) per region and detected
+        // real terrain by scanning decompressed bytes for a heightmap marker
+        // (WORLD_SURFACE). structure_starts stubs lack heightmaps, so hasTerrain==true
+        // reliably marks generated terrain. Center on the centroid of confirmed-terrain
+        // overworld chunks; fall back to spawn if none were found.
+        val terrain = allChunks.filter {
+            it.dimension == DimensionType.OVERWORLD && it.hasTerrain == true
         }
-        val biggest = generated.sortedByDescending { it.sectorCount }.take(64)
-        if (biggest.isNotEmpty()) {
-            viewX = biggest.map { it.x }.average().toFloat()
-            viewZ = biggest.map { it.z }.average().toFloat()
-            Logger.i("Centered on largest generated chunks (${viewX.toInt()},${viewZ.toInt()}) ${biggest.size}/${generated.size} overworld, maxSectors=${biggest.first().sectorCount}")
+        if (terrain.isNotEmpty()) {
+            viewX = terrain.map { it.x }.average().toFloat()
+            viewZ = terrain.map { it.z }.average().toFloat()
+            Logger.i("Centered on confirmed terrain (${viewX.toInt()},${viewZ.toInt()}) from ${terrain.size} sampled terrain chunks")
         } else {
             viewX = info.spawnX / 16f
             viewZ = info.spawnZ / 16f
-            Logger.i("Centered on spawn (${info.spawnX},${info.spawnZ})")
+            Logger.i("No sampled terrain found; centered on spawn (${info.spawnX},${info.spawnZ})")
         }
     }
 
