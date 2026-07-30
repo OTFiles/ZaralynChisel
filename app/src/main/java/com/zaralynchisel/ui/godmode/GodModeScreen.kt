@@ -30,6 +30,7 @@ import com.zaralynchisel.fileaccess.WorldCache
 import com.zaralynchisel.renderengine.GodMapRenderer
 import com.zaralynchisel.ZaralynChiselApp
 import com.zaralynchisel.utils.Logger
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -88,8 +89,8 @@ fun GodModeScreen(
         val scaled = 16f * zoom
         val offsetX = canvasW / 2f - viewX * scaled
         val offsetZ = canvasH / 2f - viewZ * scaled
-        val cx = ((sx - offsetX) / scaled).toInt()
-        val cz = ((sz - offsetZ) / scaled).toInt()
+        val cx = ((sx - offsetX) / scaled).roundToInt()
+        val cz = ((sz - offsetZ) / scaled).roundToInt()
         return cx to cz
     }
 
@@ -386,9 +387,16 @@ fun GodModeScreen(
                         onClick = {
                             clipboard?.let { clip ->
                                 if (!hasWritePermission()) { showPermDialog = true; return@ToolbarButton }
-                                // Paste centered on the current view so the user sees it land
-                                val originX = viewX.toInt()
-                                val originZ = viewZ.toInt()
+                                // Centre the clipboard on the current view so the user sees it land
+                                // where they're looking.
+                                val clipMinX = clip.chunks.minOf { it.first.x }
+                                val clipMaxX = clip.chunks.maxOf { it.first.x }
+                                val clipMinZ = clip.chunks.minOf { it.first.z }
+                                val clipMaxZ = clip.chunks.maxOf { it.first.z }
+                                val clipCx = (clipMinX + clipMaxX) / 2
+                                val clipCz = (clipMinZ + clipMaxZ) / 2
+                                val originX = viewX.roundToInt() + (clip.originChunkX - clipCx)
+                                val originZ = viewZ.roundToInt() + (clip.originChunkZ - clipCz)
                                 scope.launch {
                                     isBatchRunning = true
                                     try {
@@ -396,8 +404,8 @@ fun GodModeScreen(
                                             currentDim, originX, originZ, clip
                                         ).collect { }
                                         // Invalidate the target footprint so the loader re-reads it.
-                                        val w = (clip.chunks.maxOf { it.first.x } - clip.originChunkX)
-                                        val h = (clip.chunks.maxOf { it.first.z } - clip.originChunkZ)
+                                        val w = clipMaxX - clip.originChunkX
+                                        val h = clipMaxZ - clip.originChunkZ
                                         invalidateRange(currentDim,
                                             originX, originZ,
                                             originX + w, originZ + h)
