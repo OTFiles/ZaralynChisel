@@ -48,6 +48,16 @@ fun GodModeScreen(
 
     var worldData by remember { mutableStateOf<WorldData?>(null) }
     var chunks by remember { mutableStateOf<List<ChunkInfo>>(emptyList()) }
+    /** Surface (color) data for loaded chunks, keyed by (dim,x,z). Decoupled from the
+     *  big `chunks` list so incremental loads from the background coroutine reliably
+     *  propagate to the renderer (the list-copy + reassign pattern was lossy). */
+    val surfaceCache = remember { androidx.compose.runtime.mutableStateMapOf<Long, ChunkInfo>() }
+    /** Chunk keys confirmed to be all-air stubs, so the loader skips re-reading them. */
+    val emptyCache = remember { androidx.compose.runtime.mutableStateMapOf<Long, Unit>() }
+
+    /** Stable key for a chunk position across dimensions. */
+    fun chunkKey(dim: DimensionType, x: Int, z: Int): Long =
+        (dim.ordinal.toLong() shl 48) or ((x.toLong() and 0xFFFFFFL) shl 24) or (z.toLong() and 0xFFFFFFL)
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -134,9 +144,10 @@ fun GodModeScreen(
             val maxZ = viewZ.toInt() + viewRadius
 
             val visible = chunks.filter { chunk ->
-                !chunk.hasSurfaceData && !chunk.isEmpty &&
                 chunk.dimension == curDim &&
-                chunk.x in minX..maxX && chunk.z in minZ..maxZ
+                chunk.x in minX..maxX && chunk.z in minZ..maxZ &&
+                surfaceCache[chunkKey(curDim, chunk.x, chunk.z)] == null &&
+                emptyCache[chunkKey(curDim, chunk.x, chunk.z)] == null
             }.sortedBy {
                 val dx = it.x - cx; val dz = it.z - cz
                 dx * dx + dz * dz
@@ -145,26 +156,24 @@ fun GodModeScreen(
             if (visible.isEmpty()) { delay(150); continue }
 
             var loaded = 0; var failed = 0
-            val updatedChunks = chunks.toMutableList()
             for (chunk in visible) {
                 val surface = worldSelector.loadChunkSurface(
                     worldPathLocal, chunk.x, chunk.z, chunk.dimension
                 )
                 if (surface != null) {
                     loaded++
-                    val idx = updatedChunks.indexOf(chunk)
-                    if (idx >= 0) {
-                        val allZero = !surface.any { it != 0 }
-                        updatedChunks[idx] = chunk.copy(
+                    val allZero = !surface.any { it != 0 }
+                    if (allZero) {
+                        emptyCache[chunkKey(curDim, chunk.x, chunk.z)] = Unit
+                    } else {
+                        surfaceCache[chunkKey(curDim, chunk.x, chunk.z)] = chunk.copy(
                             surfaceColors = surface,
-                            averageHeight = surface.average().toInt(),
-                            isEmpty = chunk.isEmpty || allZero
+                            averageHeight = surface.average().toInt()
                         )
                     }
                 } else { failed++ }
             }
-            Logger.i("Surface batch: loaded=$loaded failed=$failed totalVisible=${visible.size} totalWithSurface=${updatedChunks.count { it.hasSurfaceData }}/${updatedChunks.size} view=(${cx.toInt()},${cz.toInt()})")
-            chunks = updatedChunks
+            Logger.i("Surface batch: loaded=$loaded failed=$failed totalVisible=${visible.size} totalWithSurface=${surfaceCache.size} view=(${cx.toInt()},${cz.toInt()})")
             // Yield so recomposition (incl. surface data propagation to the Canvas)
             // can happen between batches, and so we don't starve the main thread.
             delay(50)
@@ -412,14 +421,14 @@ fun GodModeScreen(
                             selectionArea = selection
                         )
 
-                        val drawChunks = chunks.filter { it.dimension == currentDim }
+                        val drawChunks = surfaceCache.values.filter { it.dimension == currentDim }
                         val result = renderer.render(
                             width = size.width.toInt(),
                             height = size.height.toInt(),
                             chunks = drawChunks,
                             config = config
                         )
-                        com.zaralynchisel.utils.Logger.i("GodRender: w=${size.width.toInt()} h=${size.height.toInt()} dimChks=${drawChunks.size} withSurface=${drawChunks.count { it.hasSurfaceData }} notEmpty=${drawChunks.count { !it.isEmpty }} visible=${result.visibleChunks} view=(${config.viewX.toInt()},${config.viewZ.toInt()}) zoom=${config.zoom}")
+                        com.zaralynchisel.utils.Logger.i("GodRender: w=${size.width.toInt()} h=${size.height.toInt()} dimChks=${drawChunks.size} withSurface=${drawChunks.size} visible=${result.visibleChunks} view=(${config.viewX.toInt()},${config.viewZ.toInt()}) zoom=${config.zoom}")
 
                         // Draw the rendered bitmap
                         drawImage(
