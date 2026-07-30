@@ -95,17 +95,29 @@ fun GodModeScreen(
     }
 
     /** Drop cached surface/empty data for a chunk rectangle so the loader re-reads
-     *  it (and the map re-renders) after a batch operation changes the region file. */
+     *  it (and the map re-renders) after a batch operation changes the region file.
+     *  Also inserts stub ChunkInfo entries for any chunks that weren't in the
+     *  initial scan (e.g. pasted into a previously-empty slot). */
     fun invalidateRange(dim: DimensionType, minX0: Int, minZ0: Int, maxX0: Int, maxZ0: Int) {
         var minX = minX0; var maxX = maxX0
         var minZ = minZ0; var maxZ = maxZ0
         if (minX > maxX) { val t = minX; minX = maxX; maxX = t }
         if (minZ > maxZ) { val t = minZ; minZ = maxZ; maxZ = t }
+        val existing = chunks.map { it.dimension to (it.x to it.z) }.toSet()
+        val newStubs = mutableListOf<ChunkInfo>()
         for (x in minX..maxX) for (z in minZ..maxZ) {
             val k = chunkKey(dim, x, z)
             surfaceCache.remove(k)
             emptyCache.remove(k)
+            if ((dim to Pair(x, z)) !in existing) {
+                newStubs.add(ChunkInfo(x = x, z = z, dimension = dim))
+            }
         }
+        if (newStubs.isNotEmpty()) chunks = chunks + newStubs
+        // The WorldSelector caches AnvilReader instances per region; after we write
+        // to the region file we must discard that cache so the next read picks up
+        // the new sectors.
+        worldSelector.clearReaderCache()
     }
 
     /** True if the app may write to world files via the File API. */

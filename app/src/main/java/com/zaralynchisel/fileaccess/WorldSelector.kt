@@ -24,6 +24,14 @@ class WorldSelector(private val context: Context) {
     private var cachedReader: com.zaralynchisel.editioncore.AnvilReader? = null
     private var cachedRegionIdx: Long = -1L
 
+    /** Discard the cached region reader so the next surface load re-reads the
+     *  region file from disk (needed after a write operation changes the file). */
+    fun clearReaderCache() {
+        cachedReader?.close()
+        cachedReader = null
+        cachedRegionIdx = -1L
+    }
+
     /**
      * Validate that a given path is a valid Minecraft world.
      */
