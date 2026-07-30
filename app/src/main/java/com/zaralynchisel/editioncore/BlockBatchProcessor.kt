@@ -79,53 +79,13 @@ class BlockBatchProcessor(
     }
 
     /**
-     * Void area: replace all blocks in selection with air.
-     * Creates new empty chunk data for each chunk in the selection.
+     * Void area: remove chunks from the selection (equivalent to deleting them —
+     * the map will show those chunks as transparent, which is the expected visual).
      */
     fun voidArea(
         dimension: DimensionType,
         selection: SelectionArea
-    ): Flow<BatchProgress> = flow {
-        val chunks = resolveChunks(dimension, selection)
-        val total = chunks.size
-        emit(BatchProgress(0, total, "准备清空操作..."))
-
-        val regionMap = groupChunksByRegion(chunks)
-        var processed = 0
-        val errors = mutableListOf<String>()
-
-        for ((regionPos, localChunks) in regionMap) {
-            emit(BatchProgress(processed, total, "清空区域 ${regionPos.fileName()}..."))
-
-            val regionFile = resolveRegionFile(dimension, regionPos)
-            if (regionFile == null || !regionFile.exists()) {
-                errors.add("区域文件不存在: ${regionPos.fileName()}")
-                processed += localChunks.size
-                continue
-            }
-
-            val writer = AnvilWriter(regionFile)
-            if (!writer.open()) {
-                errors.add("无法打开: ${regionPos.fileName()}")
-                processed += localChunks.size
-                continue
-            }
-
-            for ((lx, lz) in localChunks) {
-                try {
-                    // Create minimal empty chunk NBT
-                    val emptyNbt = createEmptyChunkNbt()
-                    writer.writeChunk(lx, lz, emptyNbt)
-                } catch (e: Exception) {
-                    errors.add("清空区块失败 ($lx, $lz): ${e.message}")
-                }
-                processed++
-            }
-            writer.close()
-        }
-
-        emit(BatchProgress(total, total, "清空完成", isComplete = true))
-    }
+    ): Flow<BatchProgress> = deleteChunks(dimension, selection)
 
     suspend fun copyChunks(
         dimension: DimensionType,
@@ -214,7 +174,7 @@ class BlockBatchProcessor(
 
             for ((lx, lz, data) in entries) {
                 try {
-                    writer.writeChunk(lx, lz, data)
+                    writer.writeChunk(lx, lz, data, 2) // zlib-compressed from readChunkData
                 } catch (e: Exception) {
                     errors.add("粘贴失败 ($lx, $lz): ${e.message}")
                 }
@@ -265,18 +225,6 @@ class BlockBatchProcessor(
     }
 
     companion object {
-        /**
-         * Create minimal empty chunk NBT data (Zlib compression type = 2).
-         * Format: [compression_type: 1 byte][NBT data...]
-         * NBT: TAG_Compound(""), TAG_End
-         */
-        fun createEmptyChunkNbt(): ByteArray {
-            return byteArrayOf(
-                2,  // Zlib compression type
-                0x0A, 0x00, 0x00,  // TAG_Compound("")
-                0x00   // TAG_End
-            )
-        }
     }
 }
 
