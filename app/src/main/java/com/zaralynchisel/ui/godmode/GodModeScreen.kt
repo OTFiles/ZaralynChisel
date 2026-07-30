@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -68,15 +69,70 @@ fun GodModeScreen(
     var showGrid by remember { mutableStateOf(true) }
     var isSelectMode by remember { mutableStateOf(false) }
     var selection by remember { mutableStateOf<SelectionArea?>(null) }
-    // Drag selection state
-    var selStartX by remember { mutableFloatStateOf(0f) }
-    var selStartZ by remember { mutableFloatStateOf(0f) }
+    // Drag selection state (chunk coords) + canvas size for screen↔chunk conversion
+    var selStartCx by remember { mutableIntStateOf(0) }
+    var selStartCz by remember { mutableIntStateOf(0) }
+    var canvasW by remember { mutableIntStateOf(1) }
+    var canvasH by remember { mutableIntStateOf(1) }
 
     // Batch operation state
     var showDeleteDialog by remember { mutableStateOf(false) }
     var isBatchRunning by remember { mutableStateOf(false) }
     var clipboard by remember { mutableStateOf<ChunkClipboard?>(null) }
+    var showPermDialog by remember { mutableStateOf(false) }
     val batchProcessor = remember(worldPath) { BlockBatchProcessor(worldPath) }
+
+    /** Convert a screen point (px, relative to canvas) to chunk coords, using the
+     *  same transform as the renderer. */
+    fun screenToChunk(sx: Float, sz: Float): Pair<Int, Int> {
+        val scaled = 16f * zoom
+        val offsetX = canvasW / 2f - viewX * scaled
+        val offsetZ = canvasH / 2f - viewZ * scaled
+        val cx = ((sx - offsetX) / scaled).toInt()
+        val cz = ((sz - offsetZ) / scaled).toInt()
+        return cx to cz
+    }
+
+    /** Drop cached surface/empty data for a chunk rectangle so the loader re-reads
+     *  it (and the map re-renders) after a batch operation changes the region file. */
+    fun invalidateRange(dim: DimensionType, minX: Int, minZ: Int, maxX: Int, maxZ: Int) {
+        if (minX > maxX) { val t = minX; minX = maxX; maxX = t }
+        if (minZ > maxZ) { val t = minZ; minZ = maxZ; maxZ = t }
+        for (x in minX..maxX) for (z in minZ..maxZ) {
+            val k = chunkKey(dim, x, z)
+            surfaceCache.remove(k)
+            emptyCache.remove(k)
+        }
+    }
+
+    /** True if the app may write to world files via the File API. */
+    fun hasWritePermission(): Boolean {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    /** Open the system "All files access" settings so the user can grant write
+     *  permission (the normal RequestPermission contract cannot grant
+     *  MANAGE_EXTERNAL_STORAGE on Android 11+). */
+    fun requestAllFilesAccess() {
+        try {
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                android.net.Uri.parse("package:${context.packageName}")
+            )
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
+            )
+            context.startActivity(intent)
+        }
+    }
 
     // Current dimension info
     val currentDim by remember(worldData) {
@@ -302,12 +358,15 @@ fun GodModeScreen(
                         enabled = selection != null && !isBatchRunning,
                         onClick = {
                             if (selection != null) {
+                                if (!hasWritePermission()) { showPermDialog = true; return@ToolbarButton }
+                                val sel = selection!!
                                 scope.launch {
                                     isBatchRunning = true
                                     try {
-                                        clipboard = batchProcessor.copyChunks(currentDim, selection!!)
+                                        clipboard = batchProcessor.copyChunks(currentDim, sel)
                                         // Delete after copy
-                                        batchProcessor.deleteChunks(currentDim, selection!!).collect { }
+                                        batchProcessor.deleteChunks(currentDim, sel).collect { }
+                                        invalidateRange(currentDim, sel.minChunkX, sel.minChunkZ, sel.maxChunkX, sel.maxChunkZ)
                                         selection = null
                                         Logger.i("Cut ${clipboard?.chunks?.size ?: 0} chunks")
                                     } finally {
@@ -323,16 +382,24 @@ fun GodModeScreen(
                         enabled = clipboard != null && !isBatchRunning,
                         onClick = {
                             clipboard?.let { clip ->
+                                if (!hasWritePermission()) { showPermDialog = true; return@ToolbarButton }
+                                // Paste centered on the current view so the user sees it land
+                                val originX = viewX.toInt()
+                                val originZ = viewZ.toInt()
                                 scope.launch {
                                     isBatchRunning = true
                                     try {
-                                        val originX = chunks.minOfOrNull { it.x } ?: 0
-                                        val originZ = chunks.minOfOrNull { it.z } ?: 0
                                         batchProcessor.pasteChunks(
                                             currentDim, originX, originZ, clip
                                         ).collect { }
+                                        // Invalidate the target footprint so the loader re-reads it.
+                                        val w = (clip.chunks.maxOf { it.first.x } - clip.originChunkX)
+                                        val h = (clip.chunks.maxOf { it.first.z } - clip.originChunkZ)
+                                        invalidateRange(currentDim,
+                                            originX, originZ,
+                                            originX + w, originZ + h)
                                         clipboard = null
-                                        Logger.i("Pasted ${clip.chunks.size} chunks")
+                                        Logger.i("Pasted ${clip.chunks.size} chunks at ($originX,$originZ)")
                                     } finally {
                                         isBatchRunning = false
                                     }
@@ -392,17 +459,29 @@ fun GodModeScreen(
                     Canvas(
                         modifier = Modifier
                             .fillMaxSize()
+                            .onGloballyPositioned {
+                                canvasW = it.size.width
+                                canvasH = it.size.height
+                            }
                             .pointerInput(isSelectMode) {
                                 if (isSelectMode) {
                                     detectDragGestures(
                                         onDragStart = { pos ->
-                                            val scaled = 16f * zoom
-                                            selStartX = (pos.x / scaled).toInt().toFloat()
-                                            selStartZ = (pos.y / scaled).toInt().toFloat()
+                                            val (cx, cz) = screenToChunk(pos.x, pos.y)
+                                            selStartCx = cx
+                                            selStartCz = cz
+                                            selection = SelectionArea.Rectangle(cx, cz, cx, cz)
                                         },
                                         onDragEnd = { }
                                     ) { change, _ ->
                                         change.consume()
+                                        val (cx, cz) = screenToChunk(change.position.x, change.position.y)
+                                        selection = SelectionArea.Rectangle(
+                                            minOf(selStartCx, cx),
+                                            minOf(selStartCz, cz),
+                                            maxOf(selStartCx, cx),
+                                            maxOf(selStartCz, cz)
+                                        )
                                     }
                                 } else {
                                     detectTransformGestures { _, pan, zoomChange, _ ->
@@ -476,6 +555,7 @@ fun GodModeScreen(
 
     // ── Delete confirmation dialog ──────────────────────────────────
     if (showDeleteDialog && selection != null) {
+        val sel = selection!!
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             icon = { Icon(Icons.Default.Warning, contentDescription = null) },
@@ -485,12 +565,14 @@ fun GodModeScreen(
                 TextButton(
                     onClick = {
                         showDeleteDialog = false
+                        if (!hasWritePermission()) { showPermDialog = true; return@TextButton }
                         scope.launch {
                             isBatchRunning = true
                             try {
-                                batchProcessor.deleteChunks(currentDim, selection!!)
-                                    .collect { /* progress */ }
+                                batchProcessor.deleteChunks(currentDim, sel).collect { }
+                                invalidateRange(currentDim, sel.minChunkX, sel.minChunkZ, sel.maxChunkX, sel.maxChunkZ)
                                 selection = null
+                                Logger.i("Deleted ${sel.maxChunkX - sel.minChunkX + 1}x${sel.maxChunkZ - sel.minChunkZ + 1} chunks")
                             } finally {
                                 isBatchRunning = false
                             }
@@ -505,6 +587,24 @@ fun GodModeScreen(
                 TextButton(onClick = { showDeleteDialog = false }) {
                     Text("取消")
                 }
+            }
+        )
+    }
+
+    if (showPermDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermDialog = false },
+            icon = { Icon(Icons.Default.Lock, contentDescription = null) },
+            title = { Text("需要写权限") },
+            text = { Text("修改区块需要“所有文件访问权限”。请在系统设置中为本应用开启后重试。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPermDialog = false
+                    requestAllFilesAccess()
+                }) { Text("去设置") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermDialog = false }) { Text("取消") }
             }
         )
     }
