@@ -95,7 +95,9 @@ fun GodModeScreen(
 
     /** Drop cached surface/empty data for a chunk rectangle so the loader re-reads
      *  it (and the map re-renders) after a batch operation changes the region file. */
-    fun invalidateRange(dim: DimensionType, minX: Int, minZ: Int, maxX: Int, maxZ: Int) {
+    fun invalidateRange(dim: DimensionType, minX0: Int, minZ0: Int, maxX0: Int, maxZ0: Int) {
+        var minX = minX0; var maxX = maxX0
+        var minZ = minZ0; var maxZ = maxZ0
         if (minX > maxX) { val t = minX; minX = maxX; maxX = t }
         if (minZ > maxZ) { val t = minZ; minZ = maxZ; maxZ = t }
         for (x in minX..maxX) for (z in minZ..maxZ) {
@@ -360,13 +362,14 @@ fun GodModeScreen(
                             if (selection != null) {
                                 if (!hasWritePermission()) { showPermDialog = true; return@ToolbarButton }
                                 val sel = selection!!
+                                val rect = sel as? SelectionArea.Rectangle
                                 scope.launch {
                                     isBatchRunning = true
                                     try {
                                         clipboard = batchProcessor.copyChunks(currentDim, sel)
                                         // Delete after copy
                                         batchProcessor.deleteChunks(currentDim, sel).collect { }
-                                        invalidateRange(currentDim, sel.minChunkX, sel.minChunkZ, sel.maxChunkX, sel.maxChunkZ)
+                                        if (rect != null) invalidateRange(currentDim, rect.minChunkX, rect.minChunkZ, rect.maxChunkX, rect.maxChunkZ)
                                         selection = null
                                         Logger.i("Cut ${clipboard?.chunks?.size ?: 0} chunks")
                                     } finally {
@@ -569,10 +572,11 @@ fun GodModeScreen(
                         scope.launch {
                             isBatchRunning = true
                             try {
+                                val rect = sel as? SelectionArea.Rectangle
                                 batchProcessor.deleteChunks(currentDim, sel).collect { }
-                                invalidateRange(currentDim, sel.minChunkX, sel.minChunkZ, sel.maxChunkX, sel.maxChunkZ)
+                                if (rect != null) invalidateRange(currentDim, rect.minChunkX, rect.minChunkZ, rect.maxChunkX, rect.maxChunkZ)
                                 selection = null
-                                Logger.i("Deleted ${sel.maxChunkX - sel.minChunkX + 1}x${sel.maxChunkZ - sel.minChunkZ + 1} chunks")
+                                Logger.i("Deleted chunks")
                             } finally {
                                 isBatchRunning = false
                             }
