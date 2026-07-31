@@ -233,7 +233,11 @@ fun GodModeScreen(
                 )
                 if (surface != null) {
                     loaded++
-                    val allZero = !surface.any { it != 0 }
+                    val nonZeroCount = surface.count { it != 0 }
+                    // Log every loaded chunk so we can trace what the paste/copy actually
+                    // produced (sector, decompression, surface colours).
+                    Logger.d("Loaded chunk (${chunk.x},${chunk.z}) nonZero=$nonZeroCount/256")
+                    val allZero = nonZeroCount == 0
                     if (allZero) {
                         emptyCache[chunkKey(curDim, chunk.x, chunk.z)] = Unit
                     } else {

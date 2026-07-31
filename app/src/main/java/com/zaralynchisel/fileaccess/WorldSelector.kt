@@ -262,6 +262,13 @@ class WorldSelector(private val context: Context) {
                 val reader = cachedReader!!
                 val lx = chunkX and 31
                 val lz = chunkZ and 31
+                // Surface the read internals so we can verify paste wrote data the
+                // reader can find.
+                val header = reader.readChunkHeader(lx, lz)
+                if (header == null || header.sectorOffset == 0 || header.sectorCount == 0) {
+                    Logger.d("loadChunkSurface($chunkX,$chunkZ): no chunk on disk (sector=0)")
+                    return@withFileIO null
+                }
                 val result = reader.readChunkSurface(lx, lz, dimension)
                 // ponytail: keep reader open for next same-region chunk
                 if (result != null) {
