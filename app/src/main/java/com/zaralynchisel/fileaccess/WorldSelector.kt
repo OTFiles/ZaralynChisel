@@ -13,6 +13,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
@@ -27,62 +28,74 @@ class WorldSelector(private val context: Context) {
     private val prefs = PreferenceManager(context)
     var safAccess: SafFileAccess? = null
 
+    /** One cached region: the reader plus its own lock.  Readers are only ever
+     *  touched under [lock], so different regions can be read in parallel while
+     *  the same region stays serialised. */
+    private class RegionEntry(val reader: com.zaralynchisel.editioncore.AnvilReader, val lock: Mutex)
+
     /** LRU cache of open region readers (access-order LinkedHashMap). Keeps a few
      *  regions open at once so alternating between them doesn't re-open the file.
-     *  All access must happen inside [readerMutex]. */
-    private val regionReaders = object : LinkedHashMap<Long, com.zaralynchisel.editioncore.AnvilReader>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, com.zaralynchisel.editioncore.AnvilReader>?): Boolean {
+     *  Map access must happen inside [readerMutex]; file reads use each entry's
+     *  own lock. */
+    private val regionEntries = object : LinkedHashMap<Long, RegionEntry>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, RegionEntry>?): Boolean {
             if (size > MAX_CACHED_REGIONS) {
-                eldest?.value?.close()
+                eldest?.value?.reader?.close()
                 return true
             }
             return false
         }
     }
 
-    /** Serialises region-file access (open, seek, read) so multiple coroutines
-     *  can share the region readers without races. The mutex only protects file
-     *  I/O; NBT decompress + surface decode happen outside the lock. */
+    /** Serialises only the LRU map operations (get/put/evict) — these are cheap.
+     *  The actual file I/O for a region is guarded by that region's own lock, so
+     *  different regions load in parallel. */
     private val readerMutex = Mutex()
 
     /** Discard all cached region readers so the next surface load re-reads the
      *  region files from disk (needed after a write operation changes them). */
     suspend fun clearReaderCache() {
         readerMutex.withLock {
-            regionReaders.values.forEach { it.close() }
-            regionReaders.clear()
+            regionEntries.values.forEach { it.reader.close() }
+            regionEntries.clear()
         }
     }
 
-    /** Mutex-guarded raw read: opens the region file (reusing the LRU region
-     *  readers) and returns the compressed NBT data for one chunk, WITHOUT the
-     *  compression-type byte.  Returns null when the chunk doesn't exist on disk
-     *  (sector=0). */
+    /** Read the compressed NBT data for one chunk (no compression-type byte).
+     *  Returns null when the chunk doesn't exist on disk (sector=0). The region
+     *  reader is looked up under the global mutex (fast), then the file read runs
+     *  under that region's own lock, so chunks in different regions load in
+     *  parallel while the same region stays serialised. */
     private suspend fun readChunkCompressed(worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType): ByteArray? {
-        return readerMutex.withLock {
-            val regionDir = File(worldPath, dimension.folderName)
-            val regionX = chunkX shr 5
-            val regionZ = chunkZ shr 5
-            val regionFile = File(regionDir, "r.$regionX.$regionZ.mca")
-            if (!regionFile.exists()) return@withLock null
-
-            val regionKey = (regionX.toLong() shl 32) or (regionZ.toLong() and 0xFFFFFFFFL)
-            val reader = regionReaders[regionKey]
-                ?: openRegionReader(worldPath, dimension, regionFile, regionKey)
-                ?: return@withLock null
-
+        val entry = getOrOpenRegion(worldPath, chunkX, chunkZ, dimension) ?: return null
+        return entry.lock.withLock {
             val lx = chunkX and 31
             val lz = chunkZ and 31
-            val header = reader.readChunkHeader(lx, lz)
+            val header = entry.reader.readChunkHeader(lx, lz)
             if (header == null || header.sectorOffset == 0 || header.sectorCount == 0) return@withLock null
-            reader.readChunkData(lx, lz)
+            entry.reader.readChunkData(lx, lz)
+        }
+    }
+
+    /** Look up (or open + cache) the region entry for the chunk. The LRU map is
+     *  guarded by the global mutex; opening a region may do a PFD IPC, so this is
+     *  only serialised across regions during the open itself. */
+    private suspend fun getOrOpenRegion(worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType): RegionEntry? {
+        val regionDir = File(worldPath, dimension.folderName)
+        val regionX = chunkX shr 5
+        val regionZ = chunkZ shr 5
+        val regionFile = File(regionDir, "r.$regionX.$regionZ.mca")
+        if (!regionFile.exists()) return null
+        val regionKey = (regionX.toLong() shl 32) or (regionZ.toLong() and 0xFFFFFFFFL)
+        return readerMutex.withLock {
+            regionEntries[regionKey] ?: openRegionReader(worldPath, dimension, regionFile, regionKey)
         }
     }
 
     /** Open a region reader, preferring zero-copy paths (SAF ParcelFileDescriptor,
      *  then direct RandomAccessFile) and falling back to stream→temp-file copy.
      *  Caller must hold [readerMutex]. */
-    private fun openRegionReader(worldPath: String, dimension: DimensionType, regionFile: File, regionKey: Long): com.zaralynchisel.editioncore.AnvilReader? {
+    private fun openRegionReader(worldPath: String, dimension: DimensionType, regionFile: File, regionKey: Long): RegionEntry? {
         val relPath = "${dimension.folderName}/${regionFile.name}"
 
         // 1) Zero-copy via SAF ParcelFileDescriptor (seekable, no temp file)
@@ -90,7 +103,11 @@ class WorldSelector(private val context: Context) {
             val pfd = saf.openParcelFileDescriptor(relPath, regionFile)
             if (pfd != null) {
                 val r = com.zaralynchisel.editioncore.AnvilReader.fromParcelFileDescriptor(pfd)
-                if (r.open()) { regionReaders[regionKey] = r; return r }
+                if (r.open()) {
+                    val e = RegionEntry(r, Mutex())
+                    regionEntries[regionKey] = e
+                    return e
+                }
                 r.close()
             }
         }
@@ -98,7 +115,11 @@ class WorldSelector(private val context: Context) {
         // 2) Zero-copy direct file access (path readable without SAF)
         if (regionFile.exists() && regionFile.canRead()) {
             val r = com.zaralynchisel.editioncore.AnvilReader(regionFile)
-            if (r.open()) { regionReaders[regionKey] = r; return r }
+            if (r.open()) {
+                val e = RegionEntry(r, Mutex())
+                regionEntries[regionKey] = e
+                return e
+            }
             r.close()
         }
 
@@ -107,7 +128,11 @@ class WorldSelector(private val context: Context) {
             ?: if (regionFile.exists()) java.io.BufferedInputStream(java.io.FileInputStream(regionFile)) else null
         if (stream == null) return null
         val r = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
-        if (r.open()) { regionReaders[regionKey] = r; return r }
+        if (r.open()) {
+            val e = RegionEntry(r, Mutex())
+            regionEntries[regionKey] = e
+            return e
+        }
         r.close()
         return null
     }
@@ -332,7 +357,7 @@ class WorldSelector(private val context: Context) {
                 val regionX = chunkX shr 5
                 val regionZ = chunkZ shr 5
                 val regionKey = (regionX.toLong() shl 32) or (regionZ.toLong() and 0xFFFFFFFFL)
-                if (regionReaders.containsKey(regionKey)) return@withLock
+                if (regionEntries.containsKey(regionKey)) return@withLock
                 val dir = File(worldPath, dimension.folderName)
                 val file = File(dir, "r.$regionX.$regionZ.mca")
                 if (!file.exists()) return@withLock
@@ -347,8 +372,10 @@ class WorldSelector(private val context: Context) {
      */
     suspend fun loadChunkSurface(worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType): IntArray? {
         return try {
-            // File I/O on the fileIO dispatcher (mutex protects cached reader).
-            val data = withFileIO {
+            // File I/O on the shared IO dispatcher (64 threads) — unlike the
+            // 2-thread fileIO pool, many coroutines can reach the per-region locks
+            // simultaneously, so different regions read in parallel.
+            val data = withContext(Dispatchers.IO) {
                 readChunkCompressed(worldPath, chunkX, chunkZ, dimension)
             } ?: return null
 
@@ -380,7 +407,7 @@ class WorldSelector(private val context: Context) {
         worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType
     ): com.zaralynchisel.renderengine.ChunkSurfaceReader.SurfaceData? {
         return try {
-            val data = withFileIO {
+            val data = withContext(Dispatchers.IO) {
                 readChunkCompressed(worldPath, chunkX, chunkZ, dimension)
             } ?: return null
             // CPU-only decode on caller's dispatcher (same pattern as loadChunkSurface)
