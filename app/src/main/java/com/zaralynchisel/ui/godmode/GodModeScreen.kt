@@ -120,6 +120,37 @@ fun GodModeScreen(
         worldSelector.clearReaderCache()
     }
 
+    /** Immediately load surface data for the chunks in the given rectangle so
+     *  the map refreshes without waiting for the next polling-loop iteration.
+     *  Called after paste/cut/delete so the result is visible straight away. */
+    suspend fun reloadFootprint(dim: DimensionType, minX0: Int, minZ0: Int, maxX0: Int, maxZ0: Int) {
+        var minX = minX0; var maxX = maxX0
+        var minZ = minZ0; var maxZ = maxZ0
+        if (minX > maxX) { val t = minX; minX = maxX; maxX = t }
+        if (minZ > maxZ) { val t = minZ; minZ = maxZ; maxZ = t }
+        for (x in minX..maxX) for (z in minZ..maxZ) {
+            val k = chunkKey(dim, x, z)
+            // Already loaded by another path?
+            if (k in surfaceCache || k in emptyCache) continue
+            val surf = worldSelector.loadChunkSurface(worldPath, x, z, dim)
+            if (surf != null) {
+                val nonZero = surf.count { it != 0 }
+                if (nonZero == 0) {
+                    emptyCache[k] = Unit
+                } else {
+                    val info = chunks.find { it.dimension == dim && it.x == x && it.z == z }
+                        ?: ChunkInfo(x = x, z = z, dimension = dim)
+                    surfaceCache[k] = info.copy(
+                        surfaceColors = surf,
+                        averageHeight = surf.average().toInt()
+                    )
+                }
+            } else {
+                emptyCache[k] = Unit
+            }
+        }
+    }
+
     /** True if the app may write to world files via the File API. */
     fun hasWritePermission(): Boolean {
         return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -386,7 +417,7 @@ fun GodModeScreen(
                                         clipboard = batchProcessor.copyChunks(currentDim, sel)
                                         // Delete after copy
                                         batchProcessor.deleteChunks(currentDim, sel).collect { }
-                                        if (rect != null) invalidateRange(currentDim, rect.minChunkX, rect.minChunkZ, rect.maxChunkX, rect.maxChunkZ)
+                                        if (rect != null) { invalidateRange(currentDim, rect.minChunkX, rect.minChunkZ, rect.maxChunkX, rect.maxChunkZ); reloadFootprint(currentDim, rect.minChunkX, rect.minChunkZ, rect.maxChunkX, rect.maxChunkZ) }
                                         selection = null
                                         Logger.i("Cut ${clipboard?.chunks?.size ?: 0} chunks")
                                     } finally {
@@ -423,6 +454,9 @@ fun GodModeScreen(
                                         val w = clipMaxX - clip.originChunkX
                                         val h = clipMaxZ - clip.originChunkZ
                                         invalidateRange(currentDim,
+                                            originX, originZ,
+                                            originX + w, originZ + h)
+                                        reloadFootprint(currentDim,
                                             originX, originZ,
                                             originX + w, originZ + h)
                                         clipboard = null
@@ -614,7 +648,7 @@ fun GodModeScreen(
                             try {
                                 val rect = sel as? SelectionArea.Rectangle
                                 batchProcessor.deleteChunks(currentDim, sel).collect { }
-                                if (rect != null) invalidateRange(currentDim, rect.minChunkX, rect.minChunkZ, rect.maxChunkX, rect.maxChunkZ)
+                                if (rect != null) { invalidateRange(currentDim, rect.minChunkX, rect.minChunkZ, rect.maxChunkX, rect.maxChunkZ); reloadFootprint(currentDim, rect.minChunkX, rect.minChunkZ, rect.maxChunkX, rect.maxChunkZ) }
                                 selection = null
                                 Logger.i("Deleted chunks")
                             } finally {
