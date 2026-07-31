@@ -31,6 +31,9 @@ import com.zaralynchisel.renderengine.GodMapRenderer
 import com.zaralynchisel.ZaralynChiselApp
 import com.zaralynchisel.utils.Logger
 import kotlin.math.floor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -240,12 +243,12 @@ fun GodModeScreen(
             val cx = viewX
             val cz = viewZ
             val viewRadius = (200f / zoom).toInt().coerceIn(10, 500)
-            val minX = viewX.toInt() - viewRadius
-            val maxX = viewX.toInt() + viewRadius
-            val minZ = viewZ.toInt() - viewRadius
-            val maxZ = viewZ.toInt() + viewRadius
+            val minX = floor(viewX).toInt() - viewRadius
+            val maxX = floor(viewX).toInt() + viewRadius
+            val minZ = floor(viewZ).toInt() - viewRadius
+            val maxZ = floor(viewZ).toInt() + viewRadius
 
-            val visible = chunks.filter { chunk ->
+            val needsLoading = chunks.filter { chunk ->
                 chunk.dimension == curDim &&
                 chunk.x in minX..maxX && chunk.z in minZ..maxZ &&
                 surfaceCache[chunkKey(curDim, chunk.x, chunk.z)] == null &&
@@ -253,36 +256,52 @@ fun GodModeScreen(
             }.sortedBy {
                 val dx = it.x - cx; val dz = it.z - cz
                 dx * dx + dz * dz
-            }.take(30)
+            }
 
-            if (visible.isEmpty()) { delay(150); continue }
+            // Dynamic batch: more chunks when zoomed out (large viewport), fewer when
+            // zoomed in.  Cap at 200 to keep memory/compose pressure reasonable.
+            val dynamicBatch = ((viewRadius * 2).toFloat() / 10f).toInt().coerceIn(30, 200)
+            val visible = needsLoading.take(dynamicBatch)
+
+            if (visible.isEmpty()) { delay(30); continue }
 
             var loaded = 0; var failed = 0
-            for (chunk in visible) {
-                val surface = worldSelector.loadChunkSurface(
-                    worldPathLocal, chunk.x, chunk.z, chunk.dimension
-                )
-                if (surface != null) {
-                    loaded++
-                    val nonZeroCount = surface.count { it != 0 }
-                    // Log every loaded chunk so we can trace what the paste/copy actually
-                    // produced (sector, decompression, surface colours).
-                    Logger.d("Loaded chunk (${chunk.x},${chunk.z}) nonZero=$nonZeroCount/256")
-                    val allZero = nonZeroCount == 0
-                    if (allZero) {
-                        emptyCache[chunkKey(curDim, chunk.x, chunk.z)] = Unit
-                    } else {
-                        surfaceCache[chunkKey(curDim, chunk.x, chunk.z)] = chunk.copy(
-                            surfaceColors = surface,
-                            averageHeight = surface.average().toInt()
-                        )
+            // Load raw compressed data in parallel (mutex in WorldSelector serialises
+            // the file-I/O part; zlib+NBT decode runs in parallel across coroutines).
+            coroutineScope {
+                visible.map { chunk ->
+                    async(Dispatchers.IO) {
+                        try {
+                            val surface = worldSelector.loadChunkSurface(
+                                worldPathLocal, chunk.x, chunk.z, chunk.dimension
+                            )
+                            chunk to surface
+                        } catch (e: Exception) {
+                            Logger.e("Load failed for (${chunk.x},${chunk.z})", e)
+                            chunk to null
+                        }
                     }
-                } else { failed++ }
+                }.forEach { deferred ->
+                    val (chunk, surface) = deferred.await()
+                    if (surface != null) {
+                        loaded++
+                        val nonZeroCount = surface.count { it != 0 }
+                        Logger.d("Loaded chunk (${chunk.x},${chunk.z}) nonZero=$nonZeroCount/256")
+                        if (nonZeroCount == 0) {
+                            emptyCache[chunkKey(curDim, chunk.x, chunk.z)] = Unit
+                        } else {
+                            surfaceCache[chunkKey(curDim, chunk.x, chunk.z)] = chunk.copy(
+                                surfaceColors = surface,
+                                averageHeight = surface.average().toInt()
+                            )
+                        }
+                    } else { failed++ }
+                }
             }
-            Logger.i("Surface batch: loaded=$loaded failed=$failed totalVisible=${visible.size} totalWithSurface=${surfaceCache.size} view=(${cx.toInt()},${cz.toInt()})")
+            Logger.i("Surface batch: loaded=$loaded failed=$failed totalVisible=${visible.size} totalWithSurface=${surfaceCache.size} view=(${floor(viewX).toInt()},${floor(viewZ).toInt()})")
             // Yield so recomposition (incl. surface data propagation to the Canvas)
             // can happen between batches, and so we don't starve the main thread.
-            delay(50)
+            delay(10)
         }
     }
 

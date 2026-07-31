@@ -235,4 +235,21 @@ object ChunkSurfaceReader {
         }
         return result
     }
+
+    /** Like [readSurface] but returns a flat IntArray(256) with z*16+x indexing
+     *  — same format as [AnvilReader.readChunkSurface]. Caller provides raw
+     *  compressed NBT (no compression-type byte). CPU-only; no file I/O. */
+    fun readSurfaceFlat(chunkNbt: ByteArray, dimension: DimensionType = DimensionType.OVERWORLD): IntArray? {
+        return try {
+            val surface2d = readSurface(chunkNbt, dimension)
+            val result = IntArray(256)
+            for (z in 0 until 16)
+                for (x in 0 until 16)
+                    result[z * 16 + x] = surface2d[x][z]
+            result
+        } catch (e: Exception) {
+            Logger.e("Failed to decode chunk surface", e)
+            null
+        }
+    }
 }
