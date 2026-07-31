@@ -330,7 +330,7 @@ fun GodModeScreen(
                     val scanned = worldSelector.scanChunks(dimPath)
                     allChunks.addAll(scanned)
                 }
-                chunks = allChunks.ifEmpty {
+                val safeChunks = allChunks.ifEmpty {
                     listOf(
                         ChunkInfo(0, 0, DimensionType.OVERWORLD),
                         ChunkInfo(1, 0, DimensionType.OVERWORLD),
@@ -341,7 +341,14 @@ fun GodModeScreen(
                 // Center on generated/played terrain rather than spawn: many worlds
                 // (server/NeoForge saves) have "structure_starts" stubs around spawn
                 // with no terrain, so spawn would render as a blank screen.
-                centerOnGeneratedTerrain(chunks, info)
+                centerOnGeneratedTerrain(safeChunks, info)
+                // Pre-open the player's region BEFORE chunks is set — the surface
+                // loader only starts once chunks is non-empty, so the PFD IPC latency
+                // is hidden instead of delaying the first batch.
+                worldSelector.prewarmRegion(
+                    worldPath, floor(viewX).toInt(), floor(viewZ).toInt(), DimensionType.OVERWORLD
+                )
+                chunks = safeChunks
                 // Cache the result
                 WorldCache.put(worldPath, info, chunks)
                 Logger.i("Loaded ${chunks.size} chunks total")

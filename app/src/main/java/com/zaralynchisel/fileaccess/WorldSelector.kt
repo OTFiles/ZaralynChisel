@@ -7,6 +7,9 @@ import com.zaralynchisel.renderengine.ChunkSurfaceReader
 import com.zaralynchisel.utils.Logger
 import com.zaralynchisel.utils.PreferenceManager
 import com.zaralynchisel.utils.withFileIO
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.BufferedInputStream
@@ -227,10 +230,11 @@ class WorldSelector(private val context: Context) {
 
     /**
      * Scan region files for actual chunk positions in a dimension.
+     * Regions are independent, so they are scanned in parallel batches of 8
+     * using zero-copy PFD access (no temp-file copy).
      */
     suspend fun scanChunks(dimensionPath: String): List<ChunkInfo> {
         return withFileIO {
-            val chunks = mutableListOf<ChunkInfo>()
             try {
                 val regionDir = File(dimensionPath)
                 val dim = DimensionType.fromFolder(dimensionPath) ?: DimensionType.OVERWORLD
@@ -247,59 +251,90 @@ class WorldSelector(private val context: Context) {
 
                 if (regionFiles.isEmpty()) {
                     Logger.w("No region files found in $dimensionPath")
-                    return@withFileIO chunks
+                    return@withFileIO emptyList()
                 }
 
-                for ((relPath, fileName) in regionFiles) {
-                    val match = REGION_FILE_REGEX.find(fileName) ?: continue
-                    val rx = match.groupValues[1].toInt()
-                    val rz = match.groupValues[2].toInt()
-
-                    Logger.d("Scanning region: $fileName")
-
-                    val regionFile = File(regionDir, fileName)
-                    val stream = if (safAccess != null) {
-                        safAccess!!.openInputStream(relPath, regionFile)
-                    } else if (regionFile.exists()) {
-                        BufferedInputStream(FileInputStream(regionFile))
-                    } else {
-                        null
-                    }
-
-                    if (stream == null) {
-                        Logger.w("Cannot open region file: $fileName")
-                        continue
-                    }
-
-                    val reader = AnvilReader.fromStream(stream)
-                    if (reader.open()) {
-                        try {
-                            for (lx in 0 until 32) {
-                                for (lz in 0 until 32) {
-                                    val header = reader.readChunkHeader(lx, lz)
-                                    if (header != null && header.sectorOffset > 0 && header.sectorCount > 0) {
-                                        chunks.add(ChunkInfo(
-                                            x = (rx shl 5) + lx,
-                                            z = (rz shl 5) + lz,
-                                            dimension = dim,
-                                            timestamp = header.timestamp,
-                                            sectorCount = header.sectorCount
-                                        ))
-                                    }
-                                }
+                val chunks = regionFiles.chunked(8).flatMap { batch ->
+                    coroutineScope {
+                        batch.map { (relPath, fileName) ->
+                            async(Dispatchers.IO) {
+                                scanOneRegion(relPath, fileName, dim, regionDir)
                             }
-                        } finally {
-                            reader.close()
-                        }
-                    } else {
-                        Logger.w("Failed to open region file: $fileName")
-                    }
+                        }.awaitAll()
+                    }.flatten()
                 }
                 Logger.i("Scanned ${chunks.size} chunks in dimension $dim")
+                chunks
             } catch (e: Exception) {
                 Logger.e("Failed to scan chunks", e)
+                emptyList()
             }
-            chunks
+        }
+    }
+
+    /** Scan a single region file, preferring zero-copy access (PFD, then direct
+     *  file) with stream→temp-file copy as the last fallback. */
+    private fun scanOneRegion(
+        relPath: String,
+        fileName: String,
+        dim: DimensionType,
+        regionDir: File
+    ): List<ChunkInfo> {
+        val match = REGION_FILE_REGEX.find(fileName) ?: return emptyList()
+        val rx = match.groupValues[1].toInt()
+        val rz = match.groupValues[2].toInt()
+        val regionFile = File(regionDir, fileName)
+        val chunks = mutableListOf<ChunkInfo>()
+
+        val reader = when {
+            safAccess != null -> {
+                safAccess!!.openParcelFileDescriptor(relPath, regionFile)
+                    ?.let { com.zaralynchisel.editioncore.AnvilReader.fromParcelFileDescriptor(it) }
+                    ?: run {
+                        val stream = safAccess!!.openInputStream(relPath, regionFile) ?: return emptyList()
+                        com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
+                    }
+            }
+            regionFile.exists() -> com.zaralynchisel.editioncore.AnvilReader(regionFile)
+            else -> return emptyList()
+        }
+
+        if (!reader.open()) { reader.close(); return emptyList() }
+        try {
+            for (lx in 0 until 32) {
+                for (lz in 0 until 32) {
+                    val header = reader.readChunkHeader(lx, lz)
+                    if (header != null && header.sectorOffset > 0 && header.sectorCount > 0) {
+                        chunks.add(ChunkInfo(
+                            x = (rx shl 5) + lx,
+                            z = (rz shl 5) + lz,
+                            dimension = dim,
+                            timestamp = header.timestamp,
+                            sectorCount = header.sectorCount
+                        ))
+                    }
+                }
+            }
+        } finally {
+            reader.close()
+        }
+        return chunks
+    }
+
+    /** Pre-open the region containing the given chunk so the first surface loads
+     *  hit the LRU cache instead of paying the SAF PFD IPC latency. */
+    suspend fun prewarmRegion(worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType) {
+        withFileIO {
+            readerMutex.withLock {
+                val regionX = chunkX shr 5
+                val regionZ = chunkZ shr 5
+                val regionKey = (regionX.toLong() shl 32) or (regionZ.toLong() and 0xFFFFFFFFL)
+                if (regionReaders.containsKey(regionKey)) return@withLock
+                val dir = File(worldPath, dimension.folderName)
+                val file = File(dir, "r.$regionX.$regionZ.mca")
+                if (!file.exists()) return@withLock
+                openRegionReader(worldPath, dimension, file, regionKey)
+            }
         }
     }
 
