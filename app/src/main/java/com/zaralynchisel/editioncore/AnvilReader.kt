@@ -10,10 +10,16 @@ import java.nio.ByteBuffer
 /**
  * Reads Minecraft Anvil (.mca) region files.
  */
-class AnvilReader(private val regionFile: File) {
+class AnvilReader private constructor(
+    private val regionFile: File?,
+    private val preopenedRaf: RandomAccessFile?,
+    private val ownedPfd: android.os.ParcelFileDescriptor?
+) {
 
     private var raf: RandomAccessFile? = null
     private var tempFile: File? = null
+
+    constructor(regionFile: File) : this(regionFile, null, null)
 
     companion object {
         /**
@@ -26,9 +32,19 @@ class AnvilReader(private val regionFile: File) {
             tempFile.outputStream().use { out ->
                 stream.copyTo(out)
             }
-            val reader = AnvilReader(tempFile)
+            val reader = AnvilReader(tempFile, null, null)
             reader.tempFile = tempFile
             return reader
+        }
+
+        /**
+         * Create an AnvilReader over a seekable ParcelFileDescriptor (zero-copy —
+         * no temp-file copy). The reader takes ownership of the PFD and closes it
+         * in [close].
+         */
+        fun fromParcelFileDescriptor(pfd: android.os.ParcelFileDescriptor): AnvilReader {
+            val raf = RandomAccessFile(pfd.fileDescriptor, "r")
+            return AnvilReader(null, raf, pfd)
         }
     }
 
@@ -37,12 +53,16 @@ class AnvilReader(private val regionFile: File) {
      */
     fun open(): Boolean {
         return try {
-            if (!regionFile.exists() || !regionFile.isFile) {
-                Logger.e("Region file not found: ${regionFile.absolutePath}")
-                return false
+            raf = preopenedRaf
+            if (raf == null) {
+                val file = regionFile ?: return false
+                if (!file.exists() || !file.isFile) {
+                    Logger.e("Region file not found: ${file.absolutePath}")
+                    return false
+                }
+                raf = RandomAccessFile(file, "r")
             }
-            raf = RandomAccessFile(regionFile, "r")
-            Logger.d("Opened region: ${regionFile.name}")
+            Logger.d("Opened region: ${raf?.fd?.toString() ?: regionFile?.name}")
             true
         } catch (e: Exception) {
             Logger.e("Failed to open region file", e)
@@ -161,6 +181,13 @@ class AnvilReader(private val regionFile: File) {
             raf?.close()
         } catch (_: Exception) { }
         raf = null
+        try {
+            ownedPfd?.close()
+        } catch (_: Exception) { }
+        try {
+            tempFile?.delete()
+        } catch (_: Exception) { }
+        tempFile = null
     }
 
     data class ChunkHeader(

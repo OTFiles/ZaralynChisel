@@ -22,26 +22,39 @@ class WorldSelector(private val context: Context) {
 
     private val prefs = PreferenceManager(context)
     var safAccess: SafFileAccess? = null
-    // ponytail: cache last-opened region reader, same-region chunks all need it
-    private var cachedReader: com.zaralynchisel.editioncore.AnvilReader? = null
-    private var cachedRegionIdx: Long = -1L
+
+    /** LRU cache of open region readers (access-order LinkedHashMap). Keeps a few
+     *  regions open at once so alternating between them doesn't re-open the file.
+     *  All access must happen inside [readerMutex]. */
+    private val regionReaders = object : LinkedHashMap<Long, com.zaralynchisel.editioncore.AnvilReader>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, com.zaralynchisel.editioncore.AnvilReader>?): Boolean {
+            if (size > MAX_CACHED_REGIONS) {
+                eldest?.value?.close()
+                return true
+            }
+            return false
+        }
+    }
+    private companion object { const val MAX_CACHED_REGIONS = 6 }
 
     /** Serialises region-file access (open, seek, read) so multiple coroutines
-     *  can share [cachedReader] without races. The mutex only protects file I/O;
-     *  NBT decompress + surface decode happen outside the lock. */
+     *  can share the region readers without races. The mutex only protects file
+     *  I/O; NBT decompress + surface decode happen outside the lock. */
     private val readerMutex = Mutex()
 
-    /** Discard the cached region reader so the next surface load re-reads the
-     *  region file from disk (needed after a write operation changes the file). */
-    fun clearReaderCache() {
-        cachedReader?.close()
-        cachedReader = null
-        cachedRegionIdx = -1L
+    /** Discard all cached region readers so the next surface load re-reads the
+     *  region files from disk (needed after a write operation changes them). */
+    suspend fun clearReaderCache() {
+        readerMutex.withLock {
+            regionReaders.values.forEach { it.close() }
+            regionReaders.clear()
+        }
     }
 
-    /** Mutex-guarded raw read: opens the region file (reusing [cachedReader]) and
-     *  returns the compressed NBT data for one chunk, WITHOUT the compression-type
-     *  byte.  Returns null when the chunk doesn't exist on disk (sector=0). */
+    /** Mutex-guarded raw read: opens the region file (reusing the LRU region
+     *  readers) and returns the compressed NBT data for one chunk, WITHOUT the
+     *  compression-type byte.  Returns null when the chunk doesn't exist on disk
+     *  (sector=0). */
     private suspend fun readChunkCompressed(worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType): ByteArray? {
         return readerMutex.withLock {
             val regionDir = File(worldPath, dimension.folderName)
@@ -51,26 +64,49 @@ class WorldSelector(private val context: Context) {
             if (!regionFile.exists()) return@withLock null
 
             val regionKey = (regionX.toLong() shl 32) or (regionZ.toLong() and 0xFFFFFFFFL)
-            if (cachedRegionIdx != regionKey || cachedReader == null) {
-                cachedReader?.close(); cachedReader = null
-                val stream = if (safAccess != null) {
-                    val relPath = "${dimension.folderName}/r.$regionX.$regionZ.mca"
-                    safAccess!!.openInputStream(relPath, regionFile)
-                } else if (regionFile.exists()) {
-                    java.io.BufferedInputStream(java.io.FileInputStream(regionFile))
-                } else null
-                if (stream == null) return@withLock null
-                cachedReader = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
-                cachedReader!!.open()
-                cachedRegionIdx = regionKey
-            }
-            val reader = cachedReader!!
+            val reader = regionReaders[regionKey]
+                ?: openRegionReader(worldPath, dimension, regionFile, regionKey)
+                ?: return@withLock null
+
             val lx = chunkX and 31
             val lz = chunkZ and 31
             val header = reader.readChunkHeader(lx, lz)
             if (header == null || header.sectorOffset == 0 || header.sectorCount == 0) return@withLock null
             reader.readChunkData(lx, lz)
         }
+    }
+
+    /** Open a region reader, preferring zero-copy paths (SAF ParcelFileDescriptor,
+     *  then direct RandomAccessFile) and falling back to stream→temp-file copy.
+     *  Caller must hold [readerMutex]. */
+    private fun openRegionReader(worldPath: String, dimension: DimensionType, regionFile: File, regionKey: Long): com.zaralynchisel.editioncore.AnvilReader? {
+        val relPath = "${dimension.folderName}/${regionFile.name}"
+
+        // 1) Zero-copy via SAF ParcelFileDescriptor (seekable, no temp file)
+        safAccess?.let { saf ->
+            val pfd = saf.openParcelFileDescriptor(relPath, regionFile)
+            if (pfd != null) {
+                val r = com.zaralynchisel.editioncore.AnvilReader.fromParcelFileDescriptor(pfd)
+                if (r.open()) { regionReaders[regionKey] = r; return r }
+                r.close()
+            }
+        }
+
+        // 2) Zero-copy direct file access (path readable without SAF)
+        if (regionFile.exists() && regionFile.canRead()) {
+            val r = com.zaralynchisel.editioncore.AnvilReader(regionFile)
+            if (r.open()) { regionReaders[regionKey] = r; return r }
+            r.close()
+        }
+
+        // 3) Fallback: stream → temp-file copy
+        val stream = safAccess?.openInputStream(relPath, regionFile)
+            ?: if (regionFile.exists()) java.io.BufferedInputStream(java.io.FileInputStream(regionFile)) else null
+        if (stream == null) return null
+        val r = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
+        if (r.open()) { regionReaders[regionKey] = r; return r }
+        r.close()
+        return null
     }
 
     /**
@@ -306,35 +342,20 @@ class WorldSelector(private val context: Context) {
     suspend fun loadChunkSurfaceAndHeight(
         worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType
     ): com.zaralynchisel.renderengine.ChunkSurfaceReader.SurfaceData? {
-        return withFileIO {
+        return try {
+            val data = withFileIO {
+                readChunkCompressed(worldPath, chunkX, chunkZ, dimension)
+            } ?: return null
+            // CPU-only decode on caller's dispatcher (same pattern as loadChunkSurface)
             try {
-                val regionDir = File(worldPath, dimension.folderName)
-                val regionX = chunkX shr 5
-                val regionZ = chunkZ shr 5
-                val regionFile = File(regionDir, "r.$regionX.$regionZ.mca")
-                if (!regionFile.exists()) return@withFileIO null
-
-                val regionKey = (regionX.toLong() shl 32) or (regionZ.toLong() and 0xFFFFFFFFL)
-                if (cachedRegionIdx != regionKey || cachedReader == null) {
-                    cachedReader?.close(); cachedReader = null
-                    val stream = if (safAccess != null) {
-                        val relPath = "${dimension.folderName}/r.$regionX.$regionZ.mca"
-                        safAccess!!.openInputStream(relPath, regionFile)
-                    } else if (regionFile.exists()) {
-                        java.io.BufferedInputStream(java.io.FileInputStream(regionFile))
-                    } else null
-                    if (stream == null) return@withFileIO null
-                    cachedReader = com.zaralynchisel.editioncore.AnvilReader.fromStream(stream)
-                    cachedReader!!.open()
-                    cachedRegionIdx = regionKey
-                }
-                val reader = cachedReader!!
-                val data = reader.readChunkData(chunkX and 31, chunkZ and 31) ?: return@withFileIO null
                 ChunkSurfaceReader.readSurfaceData(data, dimension)
             } catch (e: Exception) {
-                Logger.e("Failed to load surface+height for ($chunkX, $chunkZ)", e)
+                Logger.e("Failed to decode surface+height for ($chunkX, $chunkZ)", e)
                 null
             }
+        } catch (e: Exception) {
+            Logger.e("Failed to load surface+height for ($chunkX, $chunkZ)", e)
+            null
         }
     }
 

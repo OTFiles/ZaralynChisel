@@ -101,7 +101,7 @@ fun GodModeScreen(
      *  it (and the map re-renders) after a batch operation changes the region file.
      *  Also inserts stub ChunkInfo entries for any chunks that weren't in the
      *  initial scan (e.g. pasted into a previously-empty slot). */
-    fun invalidateRange(dim: DimensionType, minX0: Int, minZ0: Int, maxX0: Int, maxZ0: Int) {
+    suspend fun invalidateRange(dim: DimensionType, minX0: Int, minZ0: Int, maxX0: Int, maxZ0: Int) {
         var minX = minX0; var maxX = maxX0
         var minZ = minZ0; var maxZ = maxZ0
         if (minX > maxX) { val t = minX; minX = maxX; maxX = t }

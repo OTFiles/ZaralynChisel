@@ -74,6 +74,30 @@ class SafFileAccess(private val context: Context) {
     }
 
     /**
+     * Open a seekable ParcelFileDescriptor for a file under the tree (zero-copy
+     * random access — avoids the temp-file copy that [openInputStream] requires).
+     * Returns null when SAF is unavailable; callers can fall back to direct
+     * RandomAccessFile on [directFile].  The caller owns the returned PFD and must
+     * close it.
+     */
+    fun openParcelFileDescriptor(relativePath: String, directFile: File? = null): android.os.ParcelFileDescriptor? {
+        try {
+            val child = findChild(relativePath)
+            if (child != null) {
+                val pfd = context.contentResolver.openFileDescriptor(child.uri, "r")
+                if (pfd != null) {
+                    Logger.d("SAF openPFD OK: $relativePath")
+                    return pfd
+                }
+            }
+        } catch (e: Exception) {
+            Logger.d("SAF openPFD failed for $relativePath: ${e.message}")
+        }
+        Logger.w("Cannot open pfd: $relativePath")
+        return null
+    }
+
+    /**
      * Check if a file exists under the tree.
      */
     fun exists(relativePath: String, directFile: File? = null): Boolean {
