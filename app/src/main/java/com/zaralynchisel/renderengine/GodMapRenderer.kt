@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import com.zaralynchisel.editioncore.ChunkInfo
 import com.zaralynchisel.editioncore.SelectionArea
+import kotlin.math.floor
 
 /**
  * 2D map renderer for God Mode.
@@ -22,7 +23,19 @@ class GodMapRenderer {
         val showGrid: Boolean = true,
         val showBiomeColors: Boolean = true,
         val selectionArea: SelectionArea? = null,
+        /** Clipboard footprint preview, centred on the view so the user sees where a
+         *  paste will land. null when nothing is copied. */
+        val clipboardFootprint: ClipboardFootprint? = null,
         val chunkSize: Float = 16f  // Pixels per chunk at zoom=1
+    )
+
+    /** Where the clipboard will land if pasted now: the offset from the view-centre
+     *  chunk to the clipboard's top-left chunk, plus the clipboard's chunk span. */
+    data class ClipboardFootprint(
+        val centerOffsetX: Int,  // clipOriginChunkX - clipCenterX
+        val centerOffsetZ: Int,  // clipOriginChunkZ - clipCenterZ
+        val widthChunks: Int,    // clipMaxX - clipOriginChunkX (inclusive span; 0 = 1 chunk)
+        val heightChunks: Int    // clipMaxZ - clipOriginChunkZ
     )
 
     data class RenderResult(
@@ -43,6 +56,18 @@ class GodMapRenderer {
 
     private val selectionBorderPaint = Paint().apply {
         color = 0xFF4CAF50.toInt()
+        strokeWidth = 3f
+        style = Paint.Style.STROKE
+    }
+
+    private val clipboardPreviewPaint = Paint().apply {
+        // Translucent blue fill so it reads as "paste target" at a glance.
+        color = 0x552196F3.toInt()
+        style = Paint.Style.FILL
+    }
+
+    private val clipboardBorderPaint = Paint().apply {
+        color = 0xFF2196F3.toInt()
         strokeWidth = 3f
         style = Paint.Style.STROKE
     }
@@ -122,6 +147,9 @@ class GodMapRenderer {
 
         // Draw selection overlay
         config.selectionArea?.let { drawSelection(canvas, it, config, offsetX, offsetZ, scaledChunkSize) }
+        config.clipboardFootprint?.let {
+            drawClipboardPreview(canvas, it, config, offsetX, offsetZ, scaledChunkSize)
+        }
 
         return RenderResult(bitmap, visibleCount)
     }
@@ -152,6 +180,29 @@ class GodMapRenderer {
                 canvas.drawCircle(cx, cz, radius, selectionBorderPaint)
             }
         }
+    }
+
+    /** Draw the semi-transparent blue rectangle showing where the clipboard will
+     *  land if pasted. The footprint is centred on the view centre (floor(view))
+     *  plus the clipboard's origin-to-centre offset, so it tracks panning live. */
+    private fun drawClipboardPreview(
+        canvas: Canvas,
+        footprint: ClipboardFootprint,
+        config: RenderConfig,
+        offsetX: Float,
+        offsetZ: Float,
+        scaledChunkSize: Float
+    ) {
+        val originX = floor(config.viewX).toInt() + footprint.centerOffsetX
+        val originZ = floor(config.viewZ).toInt() + footprint.centerOffsetZ
+        val left = originX * scaledChunkSize + offsetX
+        val top = originZ * scaledChunkSize + offsetZ
+        // +1 because widthChunks/heightChunks are inclusive spans (0 = one chunk).
+        val right = (originX + footprint.widthChunks + 1) * scaledChunkSize + offsetX
+        val bottom = (originZ + footprint.heightChunks + 1) * scaledChunkSize + offsetZ
+        val rect = RectF(left, top, right, bottom)
+        canvas.drawRect(rect, clipboardPreviewPaint)
+        canvas.drawRect(rect, clipboardBorderPaint)
     }
 
     /**
