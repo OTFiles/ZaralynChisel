@@ -53,6 +53,22 @@ fun GodModeScreen(
 
     var worldData by remember { mutableStateOf<WorldData?>(null) }
     var chunks by remember { mutableStateOf<List<ChunkInfo>>(emptyList()) }
+
+    /** Region-bucket spatial index over [chunks]: key = dim(8b) | regionX(20b) |
+     *  regionZ(20b). Lets the surface loader visit only the regions overlapping
+     *  the viewport instead of filtering all ~35k chunks every batch. */
+    val regionBuckets by remember(worldData, chunks) {
+        derivedStateOf {
+            val map = HashMap<Long, List<ChunkInfo>>()
+            for (c in chunks) {
+                val k = (c.dimension.ordinal.toLong() shl 40) or
+                        ((c.x shr 5).toLong() and 0xFFFFF shl 20) or
+                        ((c.z shr 5).toLong() and 0xFFFFF)
+                map.getOrPut(k) { mutableListOf() }.add(c)
+            }
+            map
+        }
+    }
     /** Surface (color) data for loaded chunks, keyed by (dim,x,z). Decoupled from the
      *  big `chunks` list so incremental loads from the background coroutine reliably
      *  propagate to the renderer (the list-copy + reassign pattern was lossy). */
@@ -248,15 +264,28 @@ fun GodModeScreen(
             val minZ = floor(viewZ).toInt() - viewRadius
             val maxZ = floor(viewZ).toInt() + viewRadius
 
-            val needsLoading = chunks.filter { chunk ->
-                chunk.dimension == curDim &&
-                chunk.x in minX..maxX && chunk.z in minZ..maxZ &&
-                surfaceCache[chunkKey(curDim, chunk.x, chunk.z)] == null &&
-                emptyCache[chunkKey(curDim, chunk.x, chunk.z)] == null
-            }.sortedBy {
-                val dx = it.x - cx; val dz = it.z - cz
-                dx * dx + dz * dz
+            // Gather candidates from the region buckets overlapping the viewport
+            // (avoids filtering all ~35k chunks every batch).
+            val candidates = ArrayList<ChunkInfo>()
+            val rMinX = minX shr 5; val rMaxX = maxX shr 5
+            val rMinZ = minZ shr 5; val rMaxZ = maxZ shr 5
+            val dimOrd = curDim.ordinal.toLong() shl 40
+            for (rx in rMinX..rMaxX) {
+                val rxKey = dimOrd or ((rx.toLong() and 0xFFFFF) shl 20)
+                for (rz in rMinZ..rMaxZ) {
+                    regionBuckets[rxKey or (rz.toLong() and 0xFFFFF)]?.let { candidates.addAll(it) }
+                }
             }
+
+            val needsLoading = candidates.asSequence()
+                .filter { chunk ->
+                    chunk.x in minX..maxX && chunk.z in minZ..maxZ &&
+                    surfaceCache[chunkKey(curDim, chunk.x, chunk.z)] == null &&
+                    emptyCache[chunkKey(curDim, chunk.x, chunk.z)] == null
+                }.sortedBy {
+                    val dx = it.x - cx; val dz = it.z - cz
+                    dx * dx + dz * dz
+                }.toList()
 
             // Dynamic batch: more chunks when zoomed out (large viewport), fewer when
             // zoomed in.  Cap at 200 to keep memory/compose pressure reasonable.
