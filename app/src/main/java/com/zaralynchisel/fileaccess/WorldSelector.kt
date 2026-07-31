@@ -273,25 +273,29 @@ class WorldSelector(private val context: Context) {
      * Returns the 256-entry IntArray (index = z*16 + x), or null on failure.
      */
     suspend fun loadChunkSurface(worldPath: String, chunkX: Int, chunkZ: Int, dimension: DimensionType): IntArray? {
-        return withFileIO {
-            try {
-                val data = readChunkCompressed(worldPath, chunkX, chunkZ, dimension)
-                    ?: return@withFileIO null
-                val result = ChunkSurfaceReader.readSurfaceFlat(data, dimension)
-                if (result != null) {
-                    val nonZeroCount = result.count { it != 0 }
-                    if (chunkX == 0 && chunkZ == 0) {
-                        val sample = result.take(10).joinToString(",")
-                        Logger.i("Surface loaded for origin chunk (0,0) dim=$dimension sample=[$sample] nonZero=$nonZeroCount/256")
-                    }
-                } else {
-                    Logger.w("Surface load FAILED for chunk ($chunkX,$chunkZ) dim=$dimension")
+        return try {
+            // File I/O on the fileIO dispatcher (mutex protects cached reader).
+            val data = withFileIO {
+                readChunkCompressed(worldPath, chunkX, chunkZ, dimension)
+            } ?: return null
+
+            // CPU-only decode on the caller's dispatcher — when called from the
+            // loader's coroutineScope { async(IO) } this runs in parallel across
+            // many IO threads, not bottlenecked on the 2-thread fileIO pool.
+            val result = ChunkSurfaceReader.readSurfaceFlat(data, dimension)
+            if (result != null) {
+                val nonZeroCount = result.count { it != 0 }
+                if (chunkX == 0 && chunkZ == 0) {
+                    val sample = result.take(10).joinToString(",")
+                    Logger.i("Surface loaded for origin chunk (0,0) dim=$dimension sample=[$sample] nonZero=$nonZeroCount/256")
                 }
-                result
-            } catch (e: Exception) {
-                Logger.e("Failed to load surface for ($chunkX, $chunkZ)", e)
-                null
+            } else {
+                Logger.w("Surface load FAILED for chunk ($chunkX,$chunkZ) dim=$dimension")
             }
+            result
+        } catch (e: Exception) {
+            Logger.e("Failed to load surface for ($chunkX, $chunkZ)", e)
+            null
         }
     }
 

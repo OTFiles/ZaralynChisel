@@ -16,9 +16,9 @@ object CoroutineDispatchers {
 }
 
 /**
- * Execute a blocking operation on the file IO dispatcher.
+ * Execute a suspend block on the file IO dispatcher.
  */
-suspend fun <T> withFileIO(block: () -> T): T =
+suspend fun <T> withFileIO(block: suspend () -> T): T =
     withContext(CoroutineDispatchers.fileIO) { block() }
 
 /**
