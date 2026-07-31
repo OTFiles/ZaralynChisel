@@ -495,6 +495,7 @@ fun GodModeScreen(
                                     detectDragGestures(
                                         onDragStart = { pos ->
                                             val (cx, cz) = screenToChunk(pos.x, pos.y)
+                                            Logger.d("DragStart: pos=(${pos.x},${pos.y}) chunk=($cx,$cz) canvas=(${canvasW},${canvasH}) view=($viewX,$viewZ) zoom=$zoom")
                                             selStartCx = cx
                                             selStartCz = cz
                                             selection = SelectionArea.Rectangle(cx, cz, cx, cz)

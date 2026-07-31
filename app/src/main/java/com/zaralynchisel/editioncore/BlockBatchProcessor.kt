@@ -118,6 +118,7 @@ class BlockBatchProcessor(
 
             val minX = clipboardData.minOf { it.first.x }
             val minZ = clipboardData.minOf { it.first.z }
+            Logger.d("CopyChunks: source chunks=${clipboardData.map { "(${it.first.x},${it.first.z})" }} origin=($minX,$minZ) sel=${selection::class.simpleName}")
 
             ChunkClipboard(
                 chunks = clipboardData,
@@ -139,6 +140,7 @@ class BlockBatchProcessor(
 
         val offsetX = originChunkX - clipboard.originChunkX
         val offsetZ = originChunkZ - clipboard.originChunkZ
+        Logger.d("PasteChunks: origin=($originChunkX,$originChunkZ) clipOrigin=(${clipboard.originChunkX},${clipboard.originChunkZ}) offset=($offsetX,$offsetZ) targets=${clipboard.chunks.map { "(${it.first.x+offsetX},${it.first.z+offsetZ})" }}")
 
         val shiftedChunks = clipboard.chunks.map { (pos, data) ->
             ChunkPos(pos.x + offsetX, pos.z + offsetZ) to data
