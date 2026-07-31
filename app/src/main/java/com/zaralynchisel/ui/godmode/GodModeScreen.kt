@@ -30,7 +30,7 @@ import com.zaralynchisel.fileaccess.WorldCache
 import com.zaralynchisel.renderengine.GodMapRenderer
 import com.zaralynchisel.ZaralynChiselApp
 import com.zaralynchisel.utils.Logger
-import kotlin.math.roundToInt
+import kotlin.math.floor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -89,8 +89,8 @@ fun GodModeScreen(
         val scaled = 16f * zoom
         val offsetX = canvasW / 2f - viewX * scaled
         val offsetZ = canvasH / 2f - viewZ * scaled
-        val cx = ((sx - offsetX) / scaled).roundToInt()
-        val cz = ((sz - offsetZ) / scaled).roundToInt()
+        val cx = floor((sx - offsetX) / scaled).toInt()
+        val cz = floor((sz - offsetZ) / scaled).toInt()
         return cx to cz
     }
 
@@ -407,8 +407,8 @@ fun GodModeScreen(
                                 val clipMaxZ = clip.chunks.maxOf { it.first.z }
                                 val clipCx = (clipMinX + clipMaxX) / 2
                                 val clipCz = (clipMinZ + clipMaxZ) / 2
-                                val originX = viewX.roundToInt() + (clip.originChunkX - clipCx)
-                                val originZ = viewZ.roundToInt() + (clip.originChunkZ - clipCz)
+                                val originX = floor(viewX).toInt() + (clip.originChunkX - clipCx)
+                                val originZ = floor(viewZ).toInt() + (clip.originChunkZ - clipCz)
                                 scope.launch {
                                     isBatchRunning = true
                                     try {
@@ -530,7 +530,7 @@ fun GodModeScreen(
                             chunks = drawChunks,
                             config = config
                         )
-                        com.zaralynchisel.utils.Logger.i("GodRender: w=${size.width.toInt()} h=${size.height.toInt()} dimChks=${drawChunks.size} withSurface=${drawChunks.size} visible=${result.visibleChunks} view=(${config.viewX.toInt()},${config.viewZ.toInt()}) zoom=${config.zoom}")
+                        com.zaralynchisel.utils.Logger.i("GodRender: w=${size.width.toInt()} h=${size.height.toInt()} dimChks=${drawChunks.size} withSurface=${drawChunks.size} visible=${result.visibleChunks} view=(${floor(config.viewX).toInt()},${floor(config.viewZ).toInt()}) zoom=${config.zoom}")
 
                         // Draw the rendered bitmap
                         drawImage(
