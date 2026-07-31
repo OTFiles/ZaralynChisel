@@ -521,13 +521,13 @@ fun GodModeScreen(
                             }
                     ) {
                         val clipFootprint = clipboard?.let { clip ->
-                            val cMinX = clip.chunks.minOf { it.first.x }
-                            val cMaxX = clip.chunks.maxOf { it.first.x }
-                            val cMinZ = clip.chunks.minOf { it.first.z }
-                            val cMaxZ = clip.chunks.maxOf { it.first.z }
+                            val cMinX = clip.chunks.minOf { (pos, _) -> pos.x }
+                            val cMaxX = clip.chunks.maxOf { (pos, _) -> pos.x }
+                            val cMinZ = clip.chunks.minOf { (pos, _) -> pos.z }
+                            val cMaxZ = clip.chunks.maxOf { (pos, _) -> pos.z }
                             val cCx = (cMinX + cMaxX) / 2
                             val cCz = (cMinZ + cMaxZ) / 2
-                            GodMapRenderer.RenderConfig.ClipboardFootprint(
+                            GodMapRenderer.ClipboardFootprint(
                                 centerOffsetX = clip.originChunkX - cCx,
                                 centerOffsetZ = clip.originChunkZ - cCz,
                                 widthChunks = cMaxX - clip.originChunkX,
