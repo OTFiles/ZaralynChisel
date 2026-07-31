@@ -254,14 +254,16 @@ class WorldSelector(private val context: Context) {
                     return@withFileIO emptyList()
                 }
 
-                val chunks = regionFiles.chunked(8).flatMap { batch ->
-                    coroutineScope {
+                val chunks = mutableListOf<ChunkInfo>()
+                for (batch in regionFiles.chunked(8)) {
+                    val batchResults: List<List<ChunkInfo>> = coroutineScope {
                         batch.map { (relPath, fileName) ->
                             async(Dispatchers.IO) {
                                 scanOneRegion(relPath, fileName, dim, regionDir)
                             }
                         }.awaitAll()
-                    }.flatten()
+                    }
+                    chunks.addAll(batchResults.flatten())
                 }
                 Logger.i("Scanned ${chunks.size} chunks in dimension $dim")
                 chunks
