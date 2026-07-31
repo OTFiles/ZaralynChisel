@@ -59,7 +59,7 @@ fun GodModeScreen(
      *  the viewport instead of filtering all ~35k chunks every batch. */
     val regionBuckets by remember(worldData, chunks) {
         derivedStateOf {
-            val map = HashMap<Long, List<ChunkInfo>>()
+            val map = HashMap<Long, MutableList<ChunkInfo>>()
             for (c in chunks) {
                 val k = (c.dimension.ordinal.toLong() shl 40) or
                         ((c.x shr 5).toLong() and 0xFFFFF shl 20) or
