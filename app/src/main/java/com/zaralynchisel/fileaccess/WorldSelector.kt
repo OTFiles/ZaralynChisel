@@ -35,7 +35,6 @@ class WorldSelector(private val context: Context) {
             return false
         }
     }
-    private companion object { const val MAX_CACHED_REGIONS = 6 }
 
     /** Serialises region-file access (open, seek, read) so multiple coroutines
      *  can share the region readers without races. The mutex only protects file
@@ -401,6 +400,7 @@ class WorldSelector(private val context: Context) {
     }
 
     companion object {
+        private const val MAX_CACHED_REGIONS = 6
         private val RegionFileNameRegex = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
         private val REGION_FILE_REGEX = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
 

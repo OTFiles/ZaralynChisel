@@ -3,20 +3,25 @@ package com.zaralynchisel.editioncore
 import com.zaralynchisel.renderengine.ChunkSurfaceReader
 import com.zaralynchisel.utils.Logger
 import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 
 /**
  * Reads Minecraft Anvil (.mca) region files.
+ *
+ * Uses java.nio FileChannel for random access, which supports three zero-copy
+ * open modes (direct File, SAF ParcelFileDescriptor, temp-file fallback).
  */
 class AnvilReader private constructor(
     private val regionFile: File?,
-    private val preopenedRaf: RandomAccessFile?,
+    private val preopenedChannel: FileChannel?,
     private val ownedPfd: android.os.ParcelFileDescriptor?
 ) {
 
-    private var raf: RandomAccessFile? = null
+    private var channel: FileChannel? = null
     private var tempFile: File? = null
 
     constructor(regionFile: File) : this(regionFile, null, null)
@@ -43,8 +48,8 @@ class AnvilReader private constructor(
          * in [close].
          */
         fun fromParcelFileDescriptor(pfd: android.os.ParcelFileDescriptor): AnvilReader {
-            val raf = RandomAccessFile(pfd.fileDescriptor, "r")
-            return AnvilReader(null, raf, pfd)
+            val fis = FileInputStream(pfd.fileDescriptor)
+            return AnvilReader(null, fis.channel, pfd)
         }
     }
 
@@ -53,19 +58,38 @@ class AnvilReader private constructor(
      */
     fun open(): Boolean {
         return try {
-            raf = preopenedRaf
-            if (raf == null) {
+            channel = preopenedChannel
+            if (channel == null) {
                 val file = regionFile ?: return false
                 if (!file.exists() || !file.isFile) {
                     Logger.e("Region file not found: ${file.absolutePath}")
                     return false
                 }
-                raf = RandomAccessFile(file, "r")
+                channel = FileChannel.open(file.toPath(), StandardOpenOption.READ)
             }
-            Logger.d("Opened region: ${raf?.fd?.toString() ?: regionFile?.name}")
+            Logger.d("Opened region: ${regionFile?.name ?: "fd"}")
             true
         } catch (e: Exception) {
             Logger.e("Failed to open region file", e)
+            false
+        }
+    }
+
+    /**
+     * Position the channel at [at] and read [buffer] fully (loops until the
+     * buffer is filled or EOF). Returns false on EOF/error.
+     */
+    private fun readFullyAt(at: Long, buffer: ByteArray): Boolean {
+        val ch = channel ?: return false
+        return try {
+            ch.position(at)
+            val bb = ByteBuffer.wrap(buffer)
+            while (bb.hasRemaining()) {
+                if (ch.read(bb) < 0) return false
+            }
+            true
+        } catch (e: Exception) {
+            Logger.e("readFullyAt failed at $at", e)
             false
         }
     }
@@ -75,23 +99,20 @@ class AnvilReader private constructor(
      * Chunk coordinates are local to this region (0-31).
      */
     fun readChunkHeader(localX: Int, localZ: Int): ChunkHeader? {
-        val file = raf ?: return null
         return try {
-            val offset = 4 * (localX + localZ * 32)
+            val offset = 4L * (localX + localZ * 32)
 
             // Read location (4 bytes: 3 bytes offset, 1 byte sector count)
-            file.seek(offset.toLong())
             val locationBuffer = ByteArray(4)
-            file.readFully(locationBuffer)
+            if (!readFullyAt(offset, locationBuffer)) return null
             val sectorOffset = ((locationBuffer[0].toInt() and 0xFF) shl 16) or
                     ((locationBuffer[1].toInt() and 0xFF) shl 8) or
                     (locationBuffer[2].toInt() and 0xFF)
             val sectorCount = locationBuffer[3].toInt() and 0xFF
 
             // Read timestamp (4 bytes)
-            file.seek((offset + 4096).toLong())
             val timestampBuffer = ByteArray(4)
-            file.readFully(timestampBuffer)
+            if (!readFullyAt(offset + 4096, timestampBuffer)) return null
             val timestamp = ByteBuffer.wrap(timestampBuffer).int.toLong() and 0xFFFFFFFFL
 
             ChunkHeader(
@@ -108,30 +129,25 @@ class AnvilReader private constructor(
     }
 
     /**
-     * Read the raw compressed chunk data.
+     * Read the raw compressed chunk data (compression-type byte omitted).
      */
     fun readChunkData(localX: Int, localZ: Int): ByteArray? {
         val header = readChunkHeader(localX, localZ) ?: return null
         if (header.sectorOffset == 0 || header.sectorCount == 0) return null
 
-        val file = raf ?: return null
         return try {
             val byteOffset = header.sectorOffset * 4096L
-            file.seek(byteOffset)
 
-            // Read chunk length (4 bytes) + compression type (1 byte)
+            // Read chunk length (4 bytes) — includes the compression type byte.
             val lengthBuffer = ByteArray(4)
-            file.readFully(lengthBuffer)
+            if (!readFullyAt(byteOffset, lengthBuffer)) return null
             val chunkLength = ByteBuffer.wrap(lengthBuffer).int
 
             if (chunkLength <= 1) return null
 
-            val compressionType = file.readByte().toInt() and 0xFF
-            val dataLength = chunkLength - 1  // minus compression type byte
-
-            val data = ByteArray(dataLength)
-            file.readFully(data)
-
+            // Data = chunkLength - 1 bytes at byteOffset + 5 (skip length + compression type)
+            val data = ByteArray(chunkLength - 1)
+            if (!readFullyAt(byteOffset + 5, data)) return null
             data
         } catch (e: Exception) {
             Logger.e("Failed to read chunk data at ($localX, $localZ)", e)
@@ -178,9 +194,9 @@ class AnvilReader private constructor(
 
     fun close() {
         try {
-            raf?.close()
+            channel?.close()
         } catch (_: Exception) { }
-        raf = null
+        channel = null
         try {
             ownedPfd?.close()
         } catch (_: Exception) { }
