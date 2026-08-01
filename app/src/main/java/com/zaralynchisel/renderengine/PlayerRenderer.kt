@@ -69,6 +69,20 @@ class PlayerRenderer(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
+    /** Decoded chunk data whose textures hadn't resolved when the renderer started;
+     *  processed once a texture resolver is attached. */
+    private val pendingData = java.util.concurrent.ConcurrentHashMap<Long, ChunkSurfaceReader.SurfaceData>()
+
+    /** Number of textures that failed to load from every source (local, mods, network). */
+    @Volatile
+    var textureErrorCount = 0
+        private set
+
+    @Volatile
+    private var textureResolver: com.zaralynchisel.fileaccess.TextureResolver? = null
+
+    private val atlas = TextureAtlas()
+
     private var shaderProgram = 0
     private val projectionMatrix = FloatArray(16)
     private val viewMatrix = FloatArray(16)
@@ -88,8 +102,17 @@ class PlayerRenderer(
             GLES30.glEnable(GLES30.GL_DEPTH_TEST)
             GLES30.glEnable(GLES30.GL_CULL_FACE)
             GLES30.glCullFace(GLES30.GL_BACK)
+            // Reversed-Z depth: far→0, near→1. Depth is tested with GL_GREATER
+            // and cleared to 0. Near the far plane the depth value sits near 0,
+            // where IEEE floats have the most mantissa density, so distant
+            // geometry keeps far better depth separation than the classic
+            // near→0 mapping (matters once the view distance grows).
+            GLES30.glDepthRangef(1f, 0f)
+            GLES30.glDepthFunc(GLES30.GL_GREATER)
+            GLES30.glClearDepthf(0f)
             shaderProgram = createProgram(TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER)
             glReady = shaderProgram != 0
+            atlas.uploadPending() // create + upload the missing-texture layer
             // Chunk loading is driven by onDrawFrame's ensureChunksAround() using the
             // current camera, so it always loads around the (spawn-updated) position.
         } catch (e: Exception) {
@@ -97,16 +120,26 @@ class PlayerRenderer(
         }
     }
 
+    private var viewportWidth = 1
+    private var viewportHeight = 1
+
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-        GLES30.glViewport(0, 0, width, height)
-        val aspect = width.toFloat() / height.toFloat().coerceAtLeast(1f)
+        viewportWidth = width.coerceAtLeast(1)
+        viewportHeight = height.coerceAtLeast(1)
+        recomputeProjection()
+    }
+
+    /** Rebuild the perspective matrix from the current fov/size (also called by updateFov). */
+    private fun recomputeProjection() {
+        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
+        val aspect = viewportWidth.toFloat() / viewportHeight.toFloat()
         val fovRad = Math.toRadians(viewConfig.fov.toDouble())
         val top = (1.0 / Math.tan(fovRad / 2.0)).toFloat()
         val bottom = -top
         val left = bottom * aspect
         val right = top * aspect
-        val near = 0.1f
-        val far = (viewConfig.renderDistance * 16 + 32).toFloat()
+        val near = 0.3f
+        val far = (viewConfig.renderDistance * 16 + 64).toFloat()
         android.opengl.Matrix.frustumM(projectionMatrix, 0, left, right, bottom, top, near, far)
     }
 
@@ -135,6 +168,8 @@ class PlayerRenderer(
             GLES30.glUseProgram(shaderProgram)
             val vpLoc = GLES30.glGetUniformLocation(shaderProgram, "uVP")
             GLES30.glUniformMatrix4fv(vpLoc, 1, false, vpMatrix, 0)
+            atlas.bind()
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(shaderProgram, "uTex"), 0)
 
             for ((key, handles) in meshes) {
                 drawMesh(key, handles)
@@ -155,6 +190,7 @@ class PlayerRenderer(
 
     /** Drain CPU meshes → GL VAOs. Called on the GL thread. */
     private fun uploadPending() {
+        atlas.uploadPending() // newly registered texture layers first
         while (true) {
             val entry = pendingUpload.poll() ?: break
             val (key, mesh) = entry
@@ -173,14 +209,16 @@ class PlayerRenderer(
                 mesh.vertexBuffer, GLES30.GL_STATIC_DRAW
             )
 
-            // pos(3) + normal(3) + color(3)
+            // pos(3) + normal(3) + uv(2) + tileLayer(1)
             val stride = 9 * 4
             GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
             GLES30.glEnableVertexAttribArray(0)
             GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, stride, 3 * 4)
             GLES30.glEnableVertexAttribArray(1)
-            GLES30.glVertexAttribPointer(2, 3, GLES30.GL_FLOAT, false, stride, 6 * 4)
+            GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, stride, 6 * 4)
             GLES30.glEnableVertexAttribArray(2)
+            GLES30.glVertexAttribPointer(3, 1, GLES30.GL_FLOAT, false, stride, 8 * 4)
+            GLES30.glEnableVertexAttribArray(3)
 
             GLES30.glBindVertexArray(0)
             meshes[key] = intArrayOf(vao[0], mesh.vertexCount, vbo[0])
@@ -231,9 +269,7 @@ class PlayerRenderer(
                 loading.remove(key)
                 return
             }
-            val mesh = buildTerrainMesh(chunkX, chunkZ, data)
-            surfaceHeights[key] = data.heights
-            pendingUpload.add(key to mesh)
+            processChunkData(key, chunkX, chunkZ, data)
         } catch (e: Exception) {
             Logger.e("PlayerRenderer: loadChunk ($chunkX,$chunkZ) failed", e)
         } finally {
@@ -241,86 +277,189 @@ class PlayerRenderer(
         }
     }
 
+    /** Build (or rebuild) the mesh for a chunk and fetch any missing textures.
+     *  The first mesh uses the placeholder layer so rendering never blocks on the
+     *  network; once textures arrive the chunk is rebuilt with real tiles. */
+    private suspend fun processChunkData(key: Long, chunkX: Int, chunkZ: Int, data: ChunkSurfaceReader.SurfaceData) {
+        val resolver = textureResolver
+        if (resolver == null) {
+            // Resolver not initialised yet (screen setup race) — reprocess later.
+            pendingData[key] = data
+            return
+        }
+        val mesh = buildChunkMesh(chunkX, chunkZ, data)
+        pendingUpload.add(key to mesh)
+        surfaceHeights[key] = data.heights
+
+        val missing = mesh.paths.filter { !atlas.has(it) }
+        if (missing.isEmpty()) return
+
+        // Resolve all missing textures (parallel network/disk fetches).
+        val resolved = kotlinx.coroutines.coroutineScope {
+            missing.map { path ->
+                kotlinx.coroutines.async(kotlinx.coroutines.Dispatchers.IO) { path to resolver.resolveBlockTexture(path) }
+            }.map { it.await() }
+        }
+        var added = false
+        for ((path, bytes) in resolved) {
+            if (bytes != null) {
+                if (atlas.register(path, bytes)) added = true
+            } else {
+                textureErrorCount++
+                Logger.e("Texture unavailable for '$path' — local assets, mods and network all failed")
+            }
+        }
+        if (added) {
+            // Rebuild with the real tiles in place of the placeholder layer.
+            val mesh2 = buildChunkMesh(chunkX, chunkZ, data)
+            pendingUpload.add(key to mesh2)
+        }
+    }
+
+    /** Attach the texture resolver (once the screen has initialised it) and
+     *  reprocess any chunks that were built without textures. */
+    fun setTextureResolver(resolver: com.zaralynchisel.fileaccess.TextureResolver) {
+        textureResolver = resolver
+        val keys = pendingData.keys.toList()
+        pendingData.clear()
+        for (k in keys) {
+            val data = pendingData[k] ?: continue
+            val cx = (k shr 32).toInt()
+            val cz = k.toInt()
+            scope.launch { processChunkData(k, cx, cz, data) }
+        }
+    }
+
     /**
-     * Build a terrain mesh for one chunk: 16×16 cells → 2 triangles each, with
-     * CCW winding (front faces point UP, so back-face culling keeps the surface
-     * visible from above) and a real per-face normal computed on the CPU (the
-     * old screen-space dFdx/dFdy normal produced distorted shading that looked
-     * like curved, warped terrain).
-     * Per vertex: position (world x, surface y, world z) + normal + linear RGB.
+     * Build a 3D block mesh for one chunk. Each column renders the solid blocks
+     * between min(4-neighbour surface) and the surface, but only faces that are
+     * actually visible get geometry:
+     *  - top face only on the surface block (air above it),
+     *  - a side face only when the neighbour column's surface is lower than the
+     *    block's top (otherwise the neighbour's ground covers it),
+     *  - never bottom faces.
+     * The block at the surface uses its own block name; blocks below come from the
+     * pre-scanned stack (air gaps in caves are skipped; anything below the scanned
+     * stack is approximated with stone). Column faces are textured via the atlas
+     * (top texture on top faces, side texture on side faces).
      */
-    private fun buildTerrainMesh(
+    private fun buildChunkMesh(
         chunkX: Int, chunkZ: Int,
         data: ChunkSurfaceReader.SurfaceData
     ): ChunkMesh {
-        val colors = data.colors
         val heights = data.heights
+        val verts = ArrayList<Float>(2048)
+        val paths = LinkedHashSet<String>()
         val baseX = chunkX * 16
         val baseZ = chunkZ * 16
-        val verts = ArrayList<Float>(16 * 16 * 2 * 3 * 9)
 
-        for (j in 0 until 16) {
-            for (i in 0 until 16) {
-                val h00 = heightAt(heights, i, j)
-                val h10 = heightAt(heights, i + 1, j)
-                val h01 = heightAt(heights, i, j + 1)
-                val h11 = heightAt(heights, i + 1, j + 1)
-                val x0 = (baseX + i).toFloat(); val x1 = (baseX + i + 1).toFloat()
-                val z0 = (baseZ + j).toFloat(); val z1 = (baseZ + j + 1).toFloat()
-                val c00 = colorAt(colors, i, j)
-                val c10 = colorAt(colors, i + 1, j)
-                val c01 = colorAt(colors, i, j + 1)
-                val c11 = colorAt(colors, i + 1, j + 1)
-                // Two triangles, each wound so its normal points up.
-                emitTri(verts, x0, h00, z0, c00, x1, h10, z0, c10, x1, h11, z1, c11)
-                emitTri(verts, x0, h00, z0, c00, x1, h11, z1, c11, x0, h01, z1, c01)
+        fun surfaceAt(x: Int, z: Int): Int {
+            if (x < 0 || x > 15 || z < 0 || z > 15) {
+                // Outside this chunk the terrain is unknown; treat it as the same
+                // height as the edge column so no cliff walls are faked (the
+                // neighbouring chunk renders its own walls).
+                val h = heights[x.coerceIn(0, 15)][z.coerceIn(0, 15)]
+                return if (h == Int.MIN_VALUE) Int.MIN_VALUE else h
+            }
+            val h = heights[x][z]
+            return if (h == Int.MIN_VALUE) Int.MIN_VALUE else h
+        }
+
+        fun blockAt(x: Int, z: Int, y: Int, top: Int): String {
+            if (y == top) return data.surfaceBlocks[x][z] ?: "minecraft:stone"
+            val stack = data.belowSurface[x][z]
+            val idx = top - y - 1
+            return stack.getOrNull(idx) ?: "minecraft:stone"
+        }
+
+        fun emitFace(bx: Float, by: Float, bz: Float, face: Face, layer: Int) {
+            val v = face.vertices
+            for (k in 0..3) {
+                verts.add(bx + v[k * 3]); verts.add(by + v[k * 3 + 1]); verts.add(bz + v[k * 3 + 2])
+                verts.add(face.nx); verts.add(face.ny); verts.add(face.nz)
+                verts.add(if (k == 1 || k == 2) 1f else 0f)
+                verts.add(if (k == 2 || k == 3) 1f else 0f)
+                verts.add(layer.toFloat())
             }
         }
-        return ChunkMesh(toFloatBuffer(verts), verts.size / 9)
-    }
 
-    private fun heightAt(heights: Array<IntArray>, i: Int, j: Int): Float {
-        val h = heights[i.coerceAtMost(15)][j.coerceAtMost(15)]
-        return if (h == Int.MIN_VALUE) 0f else h.toFloat()
-    }
+        for (x in 0 until 16) {
+            for (z in 0 until 16) {
+                val top = heights[x][z]
+                if (top == Int.MIN_VALUE) continue
+                // Bottom of the visible column = min of the 4 neighbour surfaces.
+                var bottom = Int.MAX_VALUE
+                for ((nx, nz) in SURFACE_NEIGHBOURS) {
+                    val nh = surfaceAt(x + nx, z + nz)
+                    if (nh != Int.MIN_VALUE && nh < bottom) bottom = nh
+                }
+                if (bottom == Int.MAX_VALUE) bottom = top - 1
+                if (bottom > top - 1) bottom = top - 1 // at least the surface block
 
-    private fun colorAt(colors: Array<IntArray>, i: Int, j: Int): FloatArray? {
-        val cid = colors[i.coerceAtMost(15)][j.coerceAtMost(15)]
-        return if (cid > 0) toRgb(MapColorPalette.getColor(cid)) else null
-    }
-
-    /** Push one triangle (3 vertices × pos+normal+color). Normal = normalised
-     *  cross product; degenerate triangles fall back to straight up. */
-    private fun emitTri(
-        verts: MutableList<Float>,
-        ax: Float, ay: Float, az: Float, ac: FloatArray?,
-        bx: Float, by: Float, bz: Float, bc: FloatArray?,
-        cx: Float, cy: Float, cz: Float, cc: FloatArray?
-    ) {
-        val ux = bx - ax; val uy = by - ay; val uz = bz - az
-        val vx = cx - ax; val vy = cy - ay; val vz = cz - az
-        var nx = uy * vz - uz * vy
-        var ny = uz * vx - ux * vz
-        var nz = ux * vy - uy * vx
-        val len = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz)
-        if (len < 1e-6f) { nx = 0f; ny = 1f; nz = 0f }
-        else { nx /= len; ny /= len; nz /= len }
-        fun push(x: Float, y: Float, z: Float, c: FloatArray?) {
-            verts.add(x); verts.add(y); verts.add(z)
-            verts.add(nx); verts.add(ny); verts.add(nz)
-            if (c != null) { verts.add(c[0]); verts.add(c[1]); verts.add(c[2]) }
-            else { verts.add(0.08f); verts.add(0.08f); verts.add(0.12f) }
+                for (y in (bottom + 1)..top) {
+                    val block = blockAt(x, z, y, top)
+                    val bx = (baseX + x).toFloat()
+                    val bz = (baseZ + z).toFloat()
+                    val by = y.toFloat()
+                    if (y == top) {
+                        val p = topTexturePath(block)
+                        paths.add(p)
+                        emitFace(bx, by, bz, TOP_FACE, atlas.layerFor(p))
+                    }
+                    if (surfaceAt(x - 1, z) < y) {
+                        val p = sideTexturePath(block); paths.add(p)
+                        emitFace(bx, by, bz, WEST_FACE, atlas.layerFor(p))
+                    }
+                    if (surfaceAt(x + 1, z) < y) {
+                        val p = sideTexturePath(block); paths.add(p)
+                        emitFace(bx, by, bz, EAST_FACE, atlas.layerFor(p))
+                    }
+                    if (surfaceAt(x, z - 1) < y) {
+                        val p = sideTexturePath(block); paths.add(p)
+                        emitFace(bx, by, bz, NORTH_FACE, atlas.layerFor(p))
+                    }
+                    if (surfaceAt(x, z + 1) < y) {
+                        val p = sideTexturePath(block); paths.add(p)
+                        emitFace(bx, by, bz, SOUTH_FACE, atlas.layerFor(p))
+                    }
+                }
+            }
         }
-        push(ax, ay, az, ac)
-        push(bx, by, bz, bc)
-        push(cx, cy, cz, cc)
+        return ChunkMesh(toFloatBuffer(verts), verts.size / 9, paths)
     }
 
-    private fun toRgb(argb: Int): FloatArray = floatArrayOf(
-        ((argb shr 16) and 0xFF) / 255f,
-        ((argb shr 8) and 0xFF) / 255f,
-        (argb and 0xFF) / 255f
-    )
+    private fun topTexturePath(block: String): String {
+        val id = block.substringAfter(':')
+        return when (id) {
+            "grass_block" -> "minecraft:block/grass_block_top"
+            "mycelium" -> "minecraft:block/mycelium_top"
+            "podzol" -> "minecraft:block/podzol_top"
+            "dirt_path" -> "minecraft:block/dirt_path_top"
+            "farmland" -> "minecraft:block/farmland"
+            "water" -> "minecraft:block/water_still"
+            "lava" -> "minecraft:block/lava_still"
+            "snow" -> "minecraft:block/snow"
+            else -> if (id.endsWith("_log") || id.endsWith("_stem")) {
+                "minecraft:block/${id}_top"
+            } else {
+                "minecraft:block/$id"
+            }
+        }
+    }
+
+    private fun sideTexturePath(block: String): String {
+        val id = block.substringAfter(':')
+        return when (id) {
+            "grass_block" -> "minecraft:block/grass_block_side"
+            "mycelium" -> "minecraft:block/mycelium_side"
+            "podzol" -> "minecraft:block/podzol_side"
+            "dirt_path" -> "minecraft:block/dirt_path_side"
+            "water" -> "minecraft:block/water_still"
+            "lava" -> "minecraft:block/lava_still"
+            "snow" -> "minecraft:block/snow"
+            else -> "minecraft:block/$id"
+        }
+    }
 
     private fun toFloatBuffer(list: ArrayList<Float>): FloatBuffer {
         val bb = ByteBuffer.allocateDirect(list.size * 4).order(ByteOrder.nativeOrder())
@@ -338,11 +477,19 @@ class PlayerRenderer(
         viewConfig.pitch = pitch
     }
 
+    /** Change the field of view and rebuild the projection matrix. */
+    fun updateFov(fov: Float) {
+        viewConfig.fov = fov
+        recomputeProjection()
+    }
+
     fun cleanup() {
         scope.cancel()
         for ((_, handles) in meshes) deleteHandles(handles)
         meshes.clear()
         surfaceHeights.clear()
+        pendingData.clear()
+        atlas.deleteOnGl()
         if (shaderProgram != 0) GLES30.glDeleteProgram(shaderProgram)
     }
 
@@ -382,42 +529,68 @@ class PlayerRenderer(
         return sh
     }
 
+    /** One cube face: 4 corner offsets (CCW, outward normal) + the face normal. */
+    private class Face(val vertices: FloatArray, val nx: Float, val ny: Float, val nz: Float)
+
     data class ChunkMesh(
         val vertexBuffer: FloatBuffer,
-        val vertexCount: Int
+        val vertexCount: Int,
+        /** Texture paths referenced by this mesh (for resolving missing textures). */
+        val paths: Set<String>
     )
 
     companion object {
-        // Terrain shader: positions are already in world space (model = identity).
-        // Per-face normals come from the CPU mesh (flat shading); light is a fixed
-        // world-space directional light.
+        private val SURFACE_NEIGHBOURS = arrayOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1)
+
+        // Faces wound so the normal (cross product of the first triangle) points outward.
+        private val TOP_FACE = Face(
+            floatArrayOf(0f,1f,1f, 1f,1f,1f, 1f,1f,0f, 0f,1f,0f), 0f, 1f, 0f)
+        private val BOTTOM_FACE = Face(
+            floatArrayOf(0f,0f,0f, 1f,0f,0f, 1f,0f,1f, 0f,0f,1f), 0f, -1f, 0f)
+        private val EAST_FACE = Face(
+            floatArrayOf(1f,0f,0f, 1f,1f,0f, 1f,1f,1f, 1f,0f,1f), 1f, 0f, 0f)
+        private val WEST_FACE = Face(
+            floatArrayOf(0f,0f,1f, 0f,1f,1f, 0f,1f,0f, 0f,0f,0f), -1f, 0f, 0f)
+        private val SOUTH_FACE = Face(
+            floatArrayOf(0f,0f,1f, 1f,0f,1f, 1f,1f,1f, 0f,1f,1f), 0f, 0f, 1f)
+        private val NORTH_FACE = Face(
+            floatArrayOf(1f,0f,0f, 0f,0f,0f, 0f,1f,0f, 1f,1f,0f), 0f, 0f, -1f)
+
+        // Terrain shader: textured blocks, lit by a fixed world-space directional
+        // light. Texture layer = atlas array-texture layer (from aLayer).
         private const val TERRAIN_VERTEX_SHADER = """
             #version 300 es
             layout(location = 0) in vec3 aPosition;
             layout(location = 1) in vec3 aNormal;
-            layout(location = 2) in vec3 aColor;
+            layout(location = 2) in vec2 aUV;
+            layout(location = 3) in float aLayer;
             uniform mat4 uVP;
-            out vec3 vColor;
+            out vec2 vUV;
             out vec3 vNormal;
+            out float vLayer;
             void main() {
                 gl_Position = uVP * vec4(aPosition, 1.0);
-                vColor = aColor;
+                vUV = aUV;
                 vNormal = aNormal;
+                vLayer = aLayer;
             }
         """
 
         private const val TERRAIN_FRAGMENT_SHADER = """
             #version 300 es
             precision mediump float;
-            in vec3 vColor;
+            uniform sampler2DArray uTex;
+            in vec2 vUV;
             in vec3 vNormal;
+            in float vLayer;
             out vec4 fragColor;
             void main() {
+                vec4 tex = texture(uTex, vec3(vUV, vLayer));
                 vec3 normal = normalize(vNormal);
                 vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                 float diff = max(dot(normal, lightDir), 0.0);
-                float light = 0.45 + 0.55 * diff;
-                fragColor = vec4(vColor * light, 1.0);
+                float light = 0.5 + 0.5 * diff;
+                fragColor = vec4(tex.rgb * light, 1.0);
             }
         """
     }

@@ -34,7 +34,8 @@ class NetworkFetcher(private val cacheDir: File) {
 
         return withFileIO {
             try {
-                val url = URL("$mirrorUrl/$hash")
+                // Mojang's resource CDN stores files as <hash[0..2]>/<hash>.
+                val url = URL("$mirrorUrl/${hash.take(2)}/$hash")
                 val connection = url.openConnection() as HttpURLConnection
                 connection.connectTimeout = TIMEOUT_MS
                 connection.readTimeout = TIMEOUT_MS

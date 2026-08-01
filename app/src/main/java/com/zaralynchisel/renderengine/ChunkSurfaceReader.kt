@@ -23,11 +23,49 @@ object ChunkSurfaceReader {
     /** How many blocks below the heightmap top to scan for a non-air surface block. */
     private const val SURFACE_SCAN_DEPTH = 4
 
-    /** Per-column surface data: 16×16 MapColor IDs and absolute surface Y. */
+    /** How many blocks below the surface are recorded per column (for cliff walls). */
+    private const val BELOW_SURFACE_SCAN_DEPTH = 40
+
+    /** Per-column surface data: 16×16 MapColor IDs, absolute surface Y, and the block
+     *  names needed to texture the terrain (surface block + stack of blocks below it). */
     class SurfaceData(
         val colors: Array<IntArray>,   // [x][z] MapColor id (0 = air)
-        val heights: Array<IntArray>   // [x][z] absolute surface Y, Int.MIN_VALUE if none
+        val heights: Array<IntArray>,  // [x][z] absolute surface Y, Int.MIN_VALUE if none
+        /** [x][z] → block name at the surface ("minecraft:grass_block"), null if none. */
+        val surfaceBlocks: Array<Array<String?>>,
+        /** [x][z] → block names below the surface: index 0 = the block just below the
+         *  surface, going down, up to [BELOW_SURFACE_SCAN_DEPTH] entries. Only solid
+         *  blocks are recorded (scan stops at the first air). Empty if no surface. */
+        val belowSurface: Array<Array<Array<String?>>>
     )
+
+    /** Cached palette lookup for one section (avoids re-parsing palette + data per call). */
+    private class SectionBlocks(
+        val names: List<String>,
+        val bits: Int,
+        val data: LongArray?
+    ) {
+        fun blockAt(x: Int, y: Int, z: Int): String {
+            if (names.size == 1) return names[0]
+            val d = data ?: return names.firstOrNull() ?: "air"
+            val index = y * 256 + z * 16 + x
+            val pi = readPackedLong(d, index, bits)
+            return names.getOrNull(pi) ?: "air"
+        }
+
+        companion object {
+            fun from(section: NbtReader.NbtTag.NbtCompound): SectionBlocks {
+                val blockStates = section.getCompound("block_states")
+                val palette = blockStates?.getList("palette")
+                val names = palette?.value?.mapNotNull {
+                    (it as? NbtReader.NbtTag.NbtCompound)?.getString("Name")
+                } ?: emptyList()
+                val data = blockStates?.getLongArray("data")
+                val bits = maxOf(4, 32 - Integer.numberOfLeadingZeros(names.size - 1))
+                return SectionBlocks(names, bits, data)
+            }
+        }
+    }
 
     fun readSurface(
         chunkNbt: ByteArray,
@@ -40,6 +78,8 @@ object ChunkSurfaceReader {
     ): SurfaceData {
         val colors = Array(16) { IntArray(16) { 0 } }
         val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
+        val surfaceBlocks = Array(16) { arrayOfNulls<String>(16) }
+        val belowSurface = Array(16) { Array(16) { arrayOfNulls<String>(0) } }
         val doLog = logCount < 3
         try {
             val reader = NbtReader(ByteArrayInputStream(chunkNbt))
@@ -89,7 +129,10 @@ object ChunkSurfaceReader {
 
             if (sectionList.isEmpty()) return heightGradient(heightsAbs)
 
-            val sectionByY = sectionList.associateBy { it.getInt("Y") }
+            val sectionByY = HashMap<Int, SectionBlocks>()
+            for (s in sectionList) {
+                sectionByY[s.getInt("Y")] = SectionBlocks.from(s)
+            }
             val sectionsDesc = sectionList.sortedByDescending { it.getInt("Y") }
 
             if (doLog) {
@@ -110,10 +153,12 @@ object ChunkSurfaceReader {
                             if (y < worldMinY) break
                             val section = sectionByY[y shr 4] ?: continue
                             val blockY = y and 15
-                            val cid = MapColorPalette.getMapColorId(parseBlockAt(section, x, blockY, z))
+                            val name = section.blockAt(x, blockY, z)
+                            val cid = MapColorPalette.getMapColorId(name)
                             if (cid > 0) {
                                 colors[x][z] = cid
                                 heights[x][z] = y
+                                surfaceBlocks[x][z] = name
                                 break
                             }
                         }
@@ -122,10 +167,12 @@ object ChunkSurfaceReader {
                         for (section in sectionsDesc) {
                             var found = false
                             for (y in 15 downTo 0) {
-                                val cid = MapColorPalette.getMapColorId(parseBlockAt(section, x, y, z))
+                                val name = sectionByY[section.getInt("Y")]!!.blockAt(x, y, z)
+                                val cid = MapColorPalette.getMapColorId(name)
                                 if (cid > 0) {
                                     colors[x][z] = cid
                                     heights[x][z] = section.getInt("Y") * 16 + y
+                                    surfaceBlocks[x][z] = name
                                     found = true
                                     break
                                 }
@@ -133,6 +180,26 @@ object ChunkSurfaceReader {
                             if (found) break
                         }
                     }
+                }
+            }
+
+            // Record the solid block stack below each surface column (for cliff walls).
+            // Stops at the first air block (cave); deeper gaps are filled with stone
+            // by the mesh builder.
+            for (x in 0 until 16) {
+                for (z in 0 until 16) {
+                    val top = heights[x][z]
+                    if (top == Int.MIN_VALUE) continue
+                    val stack = ArrayList<String>(BELOW_SURFACE_SCAN_DEPTH)
+                    for (dy in 1..BELOW_SURFACE_SCAN_DEPTH) {
+                        val y = top - dy
+                        if (y < worldMinY) break
+                        val section = sectionByY[y shr 4] ?: break
+                        val name = section.blockAt(x, y and 15, z)
+                        if (name.endsWith("air")) break
+                        stack.add(name)
+                    }
+                    belowSurface[x][z] = stack.toTypedArray()
                 }
             }
             // Log sample of parsed surface
@@ -144,7 +211,7 @@ object ChunkSurfaceReader {
         } catch (e: Exception) {
             Logger.e("Failed to read chunk surface", e)
         }
-        return SurfaceData(colors, heights)
+        return SurfaceData(colors, heights, surfaceBlocks, belowSurface)
     }
 
     /**
@@ -153,7 +220,9 @@ object ChunkSurfaceReader {
     private fun heightGradient(heightsAbs: IntArray?): SurfaceData {
         val colors = Array(16) { IntArray(16) }
         val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
-        if (heightsAbs == null) return SurfaceData(colors, heights)
+        val surfaceBlocks = Array(16) { arrayOfNulls<String>(16) }
+        val belowSurface = Array(16) { Array(16) { arrayOfNulls<String>(0) } }
+        if (heightsAbs == null) return SurfaceData(colors, heights, surfaceBlocks, belowSurface)
         for (x in 0 until 16) {
             for (z in 0 until 16) {
                 val h = heightsAbs[z * 16 + x]
@@ -168,44 +237,7 @@ object ChunkSurfaceReader {
                 heights[x][z] = h
             }
         }
-        return SurfaceData(colors, heights)
-    }
-
-    /**
-     * Parse the block state name at a given position within a section.
-     */
-    private fun parseBlockAt(
-        section: NbtReader.NbtTag.NbtCompound,
-        x: Int, y: Int, z: Int
-    ): String {
-        val blockStates = section.getCompound("block_states") ?: return "air"
-        val palette = blockStates.getList("palette") ?: return "air"
-        // data is TAG_Long_Array (packed long array), not TAG_List
-        val data = blockStates.getLongArray("data")
-
-        // Single palette entry -> all blocks are the same
-        if (palette.value.size == 1) {
-            val entry = palette.value[0] as? NbtReader.NbtTag.NbtCompound
-            return entry?.getString("Name") ?: "air"
-        }
-
-        // If no data array, can't determine
-        if (data == null || data.isEmpty()) {
-            val entry = palette.value.firstOrNull() as? NbtReader.NbtTag.NbtCompound
-            return entry?.getString("Name") ?: "air"
-        }
-
-        // Decode palette index from packed long array.
-        // Modern (1.16+) chunk sections use per-long packing: each 64-bit long holds
-        // floor(64/bits) entries and entries never span long boundaries (matches BlueMap's
-        // PackedIntArrayAccess). This is NOT a continuous bitstream.
-        val bitsPerEntry = maxOf(4, 32 - Integer.numberOfLeadingZeros(palette.value.size - 1))
-        val blockIndex = y * 256 + z * 16 + x  // Within 16x16x16 section (YZX ordering)
-        val paletteIndex = readPackedLong(data, blockIndex, bitsPerEntry)
-
-        if (paletteIndex < 0 || paletteIndex >= palette.value.size) return "air"
-        val entry = palette.value[paletteIndex] as? NbtReader.NbtTag.NbtCompound
-        return entry?.getString("Name") ?: "air"
+        return SurfaceData(colors, heights, surfaceBlocks, belowSurface)
     }
 
     /**

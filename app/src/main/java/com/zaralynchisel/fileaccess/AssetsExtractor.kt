@@ -79,11 +79,17 @@ class AssetsExtractor(private val context: Context) {
     suspend fun loadAssetIndex(minecraftDir: String, version: String): Map<String, AssetObject>? {
         return withFileIO {
             try {
-                val indexFile = File(minecraftDir, "assets/indexes/$version.json")
-                if (!indexFile.exists()) {
-                    Logger.w("Asset index not found: ${indexFile.absolutePath}")
-                    return@withFileIO null
-                }
+                // The launcher may name the index after the full version id
+                // ("1.21.1-NeoForge") while the file itself is the base game's
+                // ("1.21.1"), so fall back to the prefix before the first '-'.
+                val candidates = listOf(version, version.substringBefore("-"))
+                    .distinct()
+                    .map { File(minecraftDir, "assets/indexes/$it.json") }
+                val indexFile = candidates.firstOrNull { it.exists() }
+                    ?: run {
+                        Logger.w("Asset index not found for version '$version' in ${candidates.joinToString()}")
+                        return@withFileIO null
+                    }
 
                 val content = indexFile.readText()
                 val root = json.parseToJsonElement(content).jsonObject

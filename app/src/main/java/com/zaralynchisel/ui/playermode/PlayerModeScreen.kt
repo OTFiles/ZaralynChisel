@@ -45,6 +45,14 @@ fun PlayerModeScreen(
     // the movement loop for ground-height collision queries.
     var rendererRef by remember { mutableStateOf<PlayerRenderer?>(null) }
 
+    // Texture resolution: reads from the world's .minecraft assets (index + objects),
+    // falls back to mod jars, then network download; failures are counted and shown.
+    val textureResolver = remember {
+        com.zaralynchisel.fileaccess.TextureResolver(context)
+    }
+    var textureErrors by remember { mutableIntStateOf(0) }
+    var fov by remember { mutableFloatStateOf(70f) }
+
     var showHud by remember { mutableStateOf(true) }
     var collisionEnabled by remember { mutableStateOf(true) }
     var showChunkGrid by remember { mutableStateOf(false) }
@@ -84,6 +92,20 @@ fun PlayerModeScreen(
             val ground = data?.heights?.get(Math.floorMod(pX.toInt(), 16))?.get(Math.floorMod(pZ.toInt(), 16))
             posY = if (ground != null && ground != Int.MIN_VALUE) ground + 1.5f else 82f
             Logger.i("Player spawn: fallback ($pX, $pZ) ground=${ground ?: "none"}")
+        }
+
+        // Initialise texture resolution and hand it to the renderer so chunks get
+        // real tiles (not just the placeholder).
+        textureResolver.initialize(worldPath)
+        textureResolver.setVersion(info?.gameVersion ?: "1.21")
+        rendererRef?.setTextureResolver(textureResolver)
+    }
+
+    // Poll the renderer's texture-error counter into Compose state for the HUD.
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            textureErrors = rendererRef?.textureErrorCount ?: 0
+            delay(500L)
         }
     }
 
@@ -179,6 +201,20 @@ fun PlayerModeScreen(
                             modifier = Modifier.size(20.dp)
                         )
                     }
+                    // FOV cycle: 70 (default) → 60 → 50
+                    TextButton(
+                        onClick = {
+                            fov = when {
+                                fov > 65f -> 60f
+                                fov > 55f -> 50f
+                                else -> 70f
+                            }
+                            rendererRef?.updateFov(fov)
+                        },
+                        modifier = Modifier.height(40.dp)
+                    ) {
+                        Text("FOV${fov.toInt()}", fontSize = 12.sp)
+                    }
                 },
                 modifier = Modifier.height(44.dp)
             )
@@ -257,6 +293,8 @@ fun PlayerModeScreen(
                 factory = { ctx ->
                     GLSurfaceView(ctx).apply {
                         setEGLContextClientVersion(3)
+                        // RGBA8888 + 24-bit depth (default is RGB565/16-bit).
+                        setEGLConfigChooser(8, 8, 8, 8, 24, 0)
                         val renderer = PlayerRenderer(
                             worldPath = worldPath,
                             spawnX = posX.toInt(),
@@ -369,6 +407,13 @@ fun PlayerModeScreen(
                             text = "碰撞: ${if (collisionEnabled) "开" else "关"}",
                             style = MaterialTheme.typography.labelSmall
                         )
+                        if (textureErrors > 0) {
+                            Text(
+                                text = "纹理加载失败: $textureErrors 个 (详见日志)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 }
 
