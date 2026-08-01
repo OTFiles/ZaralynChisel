@@ -21,6 +21,11 @@ class AssetsExtractor(private val context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /** Cached handle to the game's client jar (textures live inside it, like
+     *  BlueMap's resource pack). Opened once, closed via [close]. */
+    @Volatile
+    private var versionJar: java.util.zip.ZipFile? = null
+
     /**
      * Result of a texture lookup.
      */
@@ -53,17 +58,21 @@ class AssetsExtractor(private val context: Context) {
             // Walk up from the world directory: the .minecraft folder can be any
             // number of levels up (e.g. FCL: saves/<world> under versions/<ver>),
             // so keep climbing until a directory that owns assets/ is found.
+            // Never walk past a .minecraft folder itself.
             var cur: File? = File(worldPath)
             while (cur != null) {
+                if (cur.name == ".minecraft") {
+                    // Stop here — never inspect anything above the game directory.
+                    val ok = File(cur, "assets").exists() || File(cur, "versions").exists()
+                    if (ok) Logger.d("Found .minecraft at: ${cur.absolutePath}")
+                    else Logger.w("Found .minecraft without assets/versions: ${cur.absolutePath}")
+                    return@withFileIO if (ok) cur.absolutePath else null
+                }
                 val minecraft = File(cur, ".minecraft")
-                if (minecraft.exists() && File(minecraft, "assets").exists()) {
+                if (minecraft.exists() &&
+                    (File(minecraft, "assets").exists() || File(minecraft, "versions").exists())) {
                     Logger.d("Found .minecraft at: ${minecraft.absolutePath}")
                     return@withFileIO minecraft.absolutePath
-                }
-                // The directory itself is .minecraft (contains assets/)
-                if (cur.name == ".minecraft" && File(cur, "assets").exists()) {
-                    Logger.d("Found .minecraft at: ${cur.absolutePath}")
-                    return@withFileIO cur.absolutePath
                 }
                 cur = cur.parentFile
             }
@@ -167,6 +176,69 @@ class AssetsExtractor(private val context: Context) {
 
         val assetObject = index[assetPath] ?: return null
         return getTextureByHash(minecraftDir, assetObject.hash)
+    }
+
+    /**
+     * Read a texture straight from the game's client jar
+     * (versions/<dir>/<dir>.jar → assets/<ns>/textures/<path>.png). This is the
+     * same source BlueMap uses for the vanilla resource pack; some launchers
+     * (e.g. FCL) don't ship a Mojang-style asset index with block textures.
+     */
+    suspend fun getTextureFromVersionJar(minecraftDir: String, version: String, blockResourcePath: String): ByteArray? {
+        return withFileIO {
+            try {
+                val jar = openVersionJar(minecraftDir, version) ?: return@withFileIO null
+                val namespace = if (blockResourcePath.contains(":")) blockResourcePath.substringBefore(":") else "minecraft"
+                val path = blockResourcePath.substringAfter(":")
+                val entryPath = "assets/$namespace/textures/$path.png"
+                val entry = jar.getEntry(entryPath)
+                if (entry == null) return@withFileIO null
+                jar.getInputStream(entry).use { it.readBytes() }
+            } catch (e: Exception) {
+                Logger.w("Version jar lookup failed for $blockResourcePath: ${e.message}")
+                null
+            }
+        }
+    }
+
+    private fun openVersionJar(minecraftDir: String, version: String): java.util.zip.ZipFile? {
+        val cached = versionJar
+        if (cached != null) return cached
+        synchronized(this) {
+            versionJar?.let { return it }
+            val versionsDir = File(minecraftDir, "versions")
+            val dirs = versionsDir.listFiles { f -> f.isDirectory }?.toList() ?: emptyList()
+            // Prefer a version directory matching the requested version id.
+            val preferred = dirs.firstOrNull { d ->
+                d.name == version || d.name.startsWith(version) || version.startsWith(d.name)
+            } ?: dirs.firstOrNull()
+            if (preferred == null) {
+                Logger.w("No version directories under ${versionsDir.absolutePath}")
+                return null
+            }
+            val jarFile = File(preferred, "${preferred.name}.jar")
+            if (!jarFile.exists()) {
+                Logger.w("No client jar at ${jarFile.absolutePath}")
+                return null
+            }
+            val jar = try {
+                java.util.zip.ZipFile(jarFile)
+            } catch (e: Exception) {
+                Logger.w("Failed to open ${jarFile.absolutePath}: ${e.message}")
+                null
+            } ?: return null
+            Logger.d("Opened version jar for textures: ${jarFile.absolutePath}")
+            versionJar = jar
+            return jar
+        }
+    }
+
+    /** Close the cached version jar (call when the texture resolver is discarded). */
+    fun close() {
+        synchronized(this) {
+            versionJar?.close()
+            versionJar = null
+        }
     }
 
     /**

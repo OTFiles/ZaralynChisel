@@ -72,7 +72,22 @@ class TextureResolver(private val context: Context) {
             }
         }
 
-        // Priority 2: Mod JARs
+        // Priority 2: the game's client jar (vanilla textures; some launchers
+        // like FCL have no Mojang-style asset index). Faster and more reliable
+        // than scanning mod jars, so it comes before the mods.
+        if (minecraftDir != null) {
+            try {
+                val fromJar = assetsExtractor.getTextureFromVersionJar(minecraftDir!!, version, blockResourcePath)
+                if (fromJar != null) {
+                    Logger.d("Texture resolved from version jar: $blockResourcePath")
+                    return fromJar
+                }
+            } catch (e: Exception) {
+                Logger.w("Version jar lookup failed for $blockResourcePath: ${e.message}")
+            }
+        }
+
+        // Priority 3: Mod JARs
         if (modsDir != null) {
             try {
                 val namespace = if (blockResourcePath.contains(":")) {
@@ -93,7 +108,7 @@ class TextureResolver(private val context: Context) {
             }
         }
 
-        // Priority 3: Network download (if we have the hash from the index)
+        // Priority 4: Network download (if we have the hash from the index)
         if (minecraftDir != null) {
             try {
                 val index = assetsExtractor.loadAssetIndex(minecraftDir!!, version)
@@ -149,5 +164,10 @@ class TextureResolver(private val context: Context) {
      */
     fun clearCaches() {
         getNetworkFetcher()?.clearCache()
+    }
+
+    /** Release the cached version-jar handle (call when discarding this resolver). */
+    fun close() {
+        assetsExtractor.close()
     }
 }

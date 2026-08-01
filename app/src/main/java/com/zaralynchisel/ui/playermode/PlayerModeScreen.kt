@@ -285,6 +285,7 @@ fun PlayerModeScreen(
                         }
                         v.onPause()
                     }
+                    textureResolver.close()
                 }
             }
 
