@@ -465,7 +465,7 @@ class WorldSelector(private val context: Context) {
     }
 
     companion object {
-        private const val MAX_CACHED_REGIONS = 6
+        private const val MAX_CACHED_REGIONS = 16
         private val RegionFileNameRegex = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
         private val REGION_FILE_REGEX = Regex("r\\.(-?\\d+)\\.(-?\\d+)\\.mca")
 
