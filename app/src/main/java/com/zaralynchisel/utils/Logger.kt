@@ -19,8 +19,10 @@ object Logger {
 
     // In-memory ring buffer for in-app log viewer
     private val buffer = ArrayDeque<LogEntry>(MAX_BUFFER_LINES)
+    private var seqCounter = 0L
 
     data class LogEntry(
+        val seq: Long,
         val timestamp: String,
         val level: String,
         val message: String,
@@ -94,7 +96,7 @@ object Logger {
         val time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"))
         val date = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
         val formatted = "[$date $time] [$level] $message"
-        return LogEntry(timestamp = time, level = level, message = message, formatted = formatted)
+        return LogEntry(seq = seqCounter++, timestamp = time, level = level, message = message, formatted = formatted)
     }
 
     private fun addToBuffer(entry: LogEntry) {

@@ -376,7 +376,10 @@ class PlayerRenderer(
             val uv = atlas.uvOrigin(tile)
             val u0 = uv[0]
             val v0 = uv[1]
-            for (k in 0..3) {
+            // Each face emits 6 vertices (two triangles) so glDrawArrays(GL_TRIANGLES)
+            // never stitches across faces. Emitting only 4 made every 2nd triangle
+            // span two faces — the visible "triangle" artifacts.
+            for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
                 verts.add(bx + v[k * 3]); verts.add(by + v[k * 3 + 1]); verts.add(bz + v[k * 3 + 2])
                 verts.add(face.nx); verts.add(face.ny); verts.add(face.nz)
                 verts.add(u0 + (if (k == 1 || k == 2) 1f else 0f) * TextureAtlas.TILE_UV)

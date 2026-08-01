@@ -167,7 +167,7 @@ private fun InMemoryLogsView(logs: List<Logger.LogEntry>) {
             contentPadding = PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            items(logs, key = { it.hashCode() }) { entry ->
+            items(logs, key = { it.seq }) { entry ->
                 LogEntryRow(entry)
             }
         }
