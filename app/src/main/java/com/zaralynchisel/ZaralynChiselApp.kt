@@ -29,7 +29,7 @@ class ZaralynChiselApp : Application() {
             File(filesDir, "logs")
         }
         Logger.init(logDir)
-        Logger.i("ZaralynChiselApp.onCreate — v0.1.0-alpha, logDir=$logDir")
+        Logger.i("ZaralynChiselApp.onCreate — v${com.zaralynchisel.BuildConfig.VERSION_NAME}, logDir=$logDir")
     }
 
     companion object {

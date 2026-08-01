@@ -99,7 +99,7 @@ fun HomeScreen(
 
             // Version info - now with proper bottom spacing
             Text(
-                text = "v0.1.0-alpha",
+                text = com.zaralynchisel.BuildConfig.VERSION_NAME,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.padding(bottom = 8.dp)

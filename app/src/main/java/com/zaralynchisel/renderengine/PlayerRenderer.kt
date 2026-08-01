@@ -13,7 +13,6 @@ import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
-import java.nio.ShortBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -51,6 +50,22 @@ class PlayerRenderer(
         cameraY = spawnY.toFloat() + 2f,
         cameraZ = spawnZ.toFloat() + 0.5f
     )
+
+    /** CPU-side chunk heights kept alongside [meshes] for ground-collision
+     *  queries (PlayerModeScreen asks for the surface height under the player). */
+    private val surfaceHeights = java.util.concurrent.ConcurrentHashMap<Long, Array<IntArray>>()
+
+    /** Surface height (absolute Y) of the column containing (x,z), or null when
+     *  that chunk hasn't loaded (or has no surface). Thread-safe. */
+    fun groundHeightAt(x: Float, z: Float): Float? {
+        val cx = kotlin.math.floor(x / 16f).toInt()
+        val cz = kotlin.math.floor(z / 16f).toInt()
+        val heights = surfaceHeights[chunkKey(cx, cz)] ?: return null
+        val colX = Math.floorMod(kotlin.math.floor(x).toInt(), 16)
+        val colZ = Math.floorMod(kotlin.math.floor(z).toInt(), 16)
+        val h = heights[colX][colZ]
+        return if (h == Int.MIN_VALUE) null else h.toFloat()
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
@@ -131,10 +146,10 @@ class PlayerRenderer(
 
     private fun drawMesh(key: Long, handles: IntArray) {
         val vao = handles[0]
-        val indexCount = handles[1]
-        if (indexCount == 0) return
+        val vertexCount = handles[1]
+        if (vertexCount == 0) return
         GLES30.glBindVertexArray(vao)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, indexCount, GLES30.GL_UNSIGNED_SHORT, 0)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, vertexCount)
         GLES30.glBindVertexArray(0)
     }
 
@@ -147,10 +162,8 @@ class PlayerRenderer(
             meshes.remove(key)?.let { deleteHandles(it) }
             val vao = IntArray(1)
             val vbo = IntArray(1)
-            val ebo = IntArray(1)
             GLES30.glGenVertexArrays(1, vao, 0)
             GLES30.glGenBuffers(1, vbo, 0)
-            GLES30.glGenBuffers(1, ebo, 0)
 
             GLES30.glBindVertexArray(vao[0])
 
@@ -159,20 +172,18 @@ class PlayerRenderer(
                 GLES30.GL_ARRAY_BUFFER, mesh.vertexBuffer.capacity() * 4,
                 mesh.vertexBuffer, GLES30.GL_STATIC_DRAW
             )
-            GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, ebo[0])
-            GLES30.glBufferData(
-                GLES30.GL_ELEMENT_ARRAY_BUFFER, mesh.indexBuffer.capacity() * 2,
-                mesh.indexBuffer, GLES30.GL_STATIC_DRAW
-            )
 
-            val stride = 6 * 4 // pos(3) + color(3)
+            // pos(3) + normal(3) + color(3)
+            val stride = 9 * 4
             GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
             GLES30.glEnableVertexAttribArray(0)
             GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, stride, 3 * 4)
             GLES30.glEnableVertexAttribArray(1)
+            GLES30.glVertexAttribPointer(2, 3, GLES30.GL_FLOAT, false, stride, 6 * 4)
+            GLES30.glEnableVertexAttribArray(2)
 
             GLES30.glBindVertexArray(0)
-            meshes[key] = intArrayOf(vao[0], mesh.indexCount, vbo[0], ebo[0])
+            meshes[key] = intArrayOf(vao[0], mesh.vertexCount, vbo[0])
         }
     }
 
@@ -199,6 +210,7 @@ class PlayerRenderer(
         val drop = meshes.keys.filter { it !in desired }
         for (key in drop) {
             meshes.remove(key)?.let { deleteHandles(it) }
+            surfaceHeights.remove(key)
         }
     }
 
@@ -206,7 +218,6 @@ class PlayerRenderer(
         try {
             if (handles.size >= 3) {
                 GLES30.glDeleteBuffers(1, intArrayOf(handles[2]), 0) // vbo
-                GLES30.glDeleteBuffers(1, intArrayOf(handles[3]), 0) // ebo
             }
             GLES30.glDeleteVertexArrays(1, intArrayOf(handles[0]), 0)
         } catch (_: Exception) { }
@@ -221,6 +232,7 @@ class PlayerRenderer(
                 return
             }
             val mesh = buildTerrainMesh(chunkX, chunkZ, data)
+            surfaceHeights[key] = data.heights
             pendingUpload.add(key to mesh)
         } catch (e: Exception) {
             Logger.e("PlayerRenderer: loadChunk ($chunkX,$chunkZ) failed", e)
@@ -230,8 +242,12 @@ class PlayerRenderer(
     }
 
     /**
-     * Build a 17×17 vertex heightmap mesh for a chunk (16×16 quads = 512 triangles).
-     * Per vertex: position (world x, surface y, world z) + linear RGB color from MapColor.
+     * Build a terrain mesh for one chunk: 16×16 cells → 2 triangles each, with
+     * CCW winding (front faces point UP, so back-face culling keeps the surface
+     * visible from above) and a real per-face normal computed on the CPU (the
+     * old screen-space dFdx/dFdy normal produced distorted shading that looked
+     * like curved, warped terrain).
+     * Per vertex: position (world x, surface y, world z) + normal + linear RGB.
      */
     private fun buildTerrainMesh(
         chunkX: Int, chunkZ: Int,
@@ -241,37 +257,63 @@ class PlayerRenderer(
         val heights = data.heights
         val baseX = chunkX * 16
         val baseZ = chunkZ * 16
-        val voidColor = floatArrayOf(0.08f, 0.08f, 0.12f)
+        val verts = ArrayList<Float>(16 * 16 * 2 * 3 * 9)
 
-        // 17x17 corner vertices. Corner (i,j) samples column (min(i,15), min(j,15)).
-        val verts = ArrayList<Float>(17 * 17 * 6)
-        for (j in 0..16) {
-            for (i in 0..16) {
-                val cx = i.coerceAtMost(15)
-                val cz = j.coerceAtMost(15)
-                val h = heights[cx][cz]
-                val y = if (h == Int.MIN_VALUE) 0f else h.toFloat()
-                val cid = colors[cx][cz]
-                val rgb = if (cid > 0) toRgb(MapColorPalette.getColor(cid)) else voidColor
-                verts.add((baseX + i).toFloat())
-                verts.add(y)
-                verts.add((baseZ + j).toFloat())
-                verts.add(rgb[0]); verts.add(rgb[1]); verts.add(rgb[2])
-            }
-        }
-        // Indices: two triangles per cell.
-        val indices = ArrayList<Short>(16 * 16 * 6)
         for (j in 0 until 16) {
             for (i in 0 until 16) {
-                val v00 = (j * 17 + i).toShort()
-                val v10 = (j * 17 + i + 1).toShort()
-                val v01 = ((j + 1) * 17 + i).toShort()
-                val v11 = ((j + 1) * 17 + i + 1).toShort()
-                indices.add(v00); indices.add(v10); indices.add(v11)
-                indices.add(v00); indices.add(v11); indices.add(v01)
+                val h00 = heightAt(heights, i, j)
+                val h10 = heightAt(heights, i + 1, j)
+                val h01 = heightAt(heights, i, j + 1)
+                val h11 = heightAt(heights, i + 1, j + 1)
+                val x0 = (baseX + i).toFloat(); val x1 = (baseX + i + 1).toFloat()
+                val z0 = (baseZ + j).toFloat(); val z1 = (baseZ + j + 1).toFloat()
+                val c00 = colorAt(colors, i, j)
+                val c10 = colorAt(colors, i + 1, j)
+                val c01 = colorAt(colors, i, j + 1)
+                val c11 = colorAt(colors, i + 1, j + 1)
+                // Two triangles, each wound so its normal points up.
+                emitTri(verts, x0, h00, z0, c00, x1, h10, z0, c10, x1, h11, z1, c11)
+                emitTri(verts, x0, h00, z0, c00, x1, h11, z1, c11, x0, h01, z1, c01)
             }
         }
-        return ChunkMesh(toFloatBuffer(verts), toShortBuffer(indices), indices.size)
+        return ChunkMesh(toFloatBuffer(verts), verts.size / 9)
+    }
+
+    private fun heightAt(heights: Array<IntArray>, i: Int, j: Int): Float {
+        val h = heights[i.coerceAtMost(15)][j.coerceAtMost(15)]
+        return if (h == Int.MIN_VALUE) 0f else h.toFloat()
+    }
+
+    private fun colorAt(colors: Array<IntArray>, i: Int, j: Int): FloatArray? {
+        val cid = colors[i.coerceAtMost(15)][j.coerceAtMost(15)]
+        return if (cid > 0) toRgb(MapColorPalette.getColor(cid)) else null
+    }
+
+    /** Push one triangle (3 vertices × pos+normal+color). Normal = normalised
+     *  cross product; degenerate triangles fall back to straight up. */
+    private fun emitTri(
+        verts: MutableList<Float>,
+        ax: Float, ay: Float, az: Float, ac: FloatArray?,
+        bx: Float, by: Float, bz: Float, bc: FloatArray?,
+        cx: Float, cy: Float, cz: Float, cc: FloatArray?
+    ) {
+        val ux = bx - ax; val uy = by - ay; val uz = bz - az
+        val vx = cx - ax; val vy = cy - ay; val vz = cz - az
+        var nx = uy * vz - uz * vy
+        var ny = uz * vx - ux * vz
+        var nz = ux * vy - uy * vx
+        val len = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz)
+        if (len < 1e-6f) { nx = 0f; ny = 1f; nz = 0f }
+        else { nx /= len; ny /= len; nz /= len }
+        fun push(x: Float, y: Float, z: Float, c: FloatArray?) {
+            verts.add(x); verts.add(y); verts.add(z)
+            verts.add(nx); verts.add(ny); verts.add(nz)
+            if (c != null) { verts.add(c[0]); verts.add(c[1]); verts.add(c[2]) }
+            else { verts.add(0.08f); verts.add(0.08f); verts.add(0.12f) }
+        }
+        push(ax, ay, az, ac)
+        push(bx, by, bz, bc)
+        push(cx, cy, cz, cc)
     }
 
     private fun toRgb(argb: Int): FloatArray = floatArrayOf(
@@ -288,14 +330,6 @@ class PlayerRenderer(
         return fb
     }
 
-    private fun toShortBuffer(list: ArrayList<Short>): ShortBuffer {
-        val bb = ByteBuffer.allocateDirect(list.size * 2).order(ByteOrder.nativeOrder())
-        val sb = bb.asShortBuffer()
-        for (v in list) sb.put(v)
-        sb.position(0)
-        return sb
-    }
-
     fun updateCamera(x: Float, y: Float, z: Float, yaw: Float, pitch: Float) {
         viewConfig.cameraX = x
         viewConfig.cameraY = y
@@ -308,6 +342,7 @@ class PlayerRenderer(
         scope.cancel()
         for ((_, handles) in meshes) deleteHandles(handles)
         meshes.clear()
+        surfaceHeights.clear()
         if (shaderProgram != 0) GLES30.glDeleteProgram(shaderProgram)
     }
 
@@ -349,25 +384,25 @@ class PlayerRenderer(
 
     data class ChunkMesh(
         val vertexBuffer: FloatBuffer,
-        val indexBuffer: ShortBuffer,
-        val indexCount: Int
+        val vertexCount: Int
     )
 
     companion object {
         // Terrain shader: positions are already in world space (model = identity).
-        // Per-face normals are derived in the fragment shader from screen-space
-        // derivatives of the world position, giving flat-shaded 3D terrain.
+        // Per-face normals come from the CPU mesh (flat shading); light is a fixed
+        // world-space directional light.
         private const val TERRAIN_VERTEX_SHADER = """
             #version 300 es
             layout(location = 0) in vec3 aPosition;
-            layout(location = 1) in vec3 aColor;
+            layout(location = 1) in vec3 aNormal;
+            layout(location = 2) in vec3 aColor;
             uniform mat4 uVP;
             out vec3 vColor;
-            out vec3 vWorldPos;
+            out vec3 vNormal;
             void main() {
-                vWorldPos = aPosition;
                 gl_Position = uVP * vec4(aPosition, 1.0);
                 vColor = aColor;
+                vNormal = aNormal;
             }
         """
 
@@ -375,12 +410,10 @@ class PlayerRenderer(
             #version 300 es
             precision mediump float;
             in vec3 vColor;
-            in vec3 vWorldPos;
+            in vec3 vNormal;
             out vec4 fragColor;
             void main() {
-                vec3 dx = dFdx(vWorldPos);
-                vec3 dz = dFdy(vWorldPos);
-                vec3 normal = normalize(cross(dx, dz));
+                vec3 normal = normalize(vNormal);
                 vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                 float diff = max(dot(normal, lightDir), 0.0);
                 float light = 0.45 + 0.55 * diff;

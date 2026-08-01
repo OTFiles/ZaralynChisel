@@ -155,7 +155,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLogViewer: () -> Unit = {}) {
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "v0.1.0-alpha",
+                        text = com.zaralynchisel.BuildConfig.VERSION_NAME,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

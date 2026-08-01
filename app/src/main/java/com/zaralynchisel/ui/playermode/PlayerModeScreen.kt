@@ -41,7 +41,10 @@ fun PlayerModeScreen(
         com.zaralynchisel.fileaccess.WorldSelector(context).also { it.safAccess = app.safAccess }
     }
 
-    var textureAvailable by remember { mutableStateOf(true) }
+    // The GL renderer instance (set when the AndroidView factory runs). Used by
+    // the movement loop for ground-height collision queries.
+    var rendererRef by remember { mutableStateOf<PlayerRenderer?>(null) }
+
     var showHud by remember { mutableStateOf(true) }
     var collisionEnabled by remember { mutableStateOf(true) }
     var showChunkGrid by remember { mutableStateOf(false) }
@@ -92,11 +95,14 @@ fun PlayerModeScreen(
     var moveUp by remember { mutableStateOf(false) }
     var moveDown by remember { mutableStateOf(false) }
 
-    // Continuous movement coroutine
+    // Continuous movement coroutine. With collision enabled the player is glued
+    // to the terrain: moving uphill raises them, walking off a cliff makes them
+    // fall, ↑ jumps and ↓ digs down (release ↓ to pop back to the surface).
+    // Without collision it's free flight (keys ±Y directly, no gravity).
     LaunchedEffect(moveForward, moveBack, moveLeft, moveRight, moveUp, moveDown) {
         val moveSpeed = 0.3f
         while (isActive) {
-            if (moveForward || moveBack || moveLeft || moveRight || moveUp || moveDown) {
+            if (moveForward || moveBack || moveLeft || moveRight) {
                 val radYaw = Math.toRadians(yaw.toDouble())
                 val sinYaw = kotlin.math.sin(radYaw).toFloat()
                 val cosYaw = kotlin.math.cos(radYaw).toFloat()
@@ -105,6 +111,19 @@ fun PlayerModeScreen(
                 if (moveBack) { posX += sinYaw * moveSpeed; posZ -= cosYaw * moveSpeed }
                 if (moveLeft) { posX -= cosYaw * moveSpeed; posZ -= sinYaw * moveSpeed }
                 if (moveRight) { posX += cosYaw * moveSpeed; posZ += sinYaw * moveSpeed }
+            }
+            if (collisionEnabled) {
+                val ground = rendererRef?.groundHeightAt(posX, posZ)
+                if (ground != null) {
+                    val floor = ground + 1.62f // eye height
+                    when {
+                        moveUp -> posY += 0.5f    // jump / climb
+                        moveDown -> posY -= moveSpeed // dig down (hold to stay under)
+                        else -> { posY -= 0.25f; if (posY < floor) posY = floor } // gravity
+                    }
+                    if (posY < floor && !moveDown) posY = floor
+                }
+            } else {
                 if (moveUp) posY += moveSpeed
                 if (moveDown) posY -= moveSpeed
             }
@@ -112,37 +131,6 @@ fun PlayerModeScreen(
         }
     }
 
-    if (!textureAvailable) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                Icons.Default.Warning,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.error
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "纹理不可用",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Player 模式需要 Minecraft 纹理。\n请安装资源包或启用网络下载。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onBack) {
-                Text("返回 God 模式")
-            }
-        }
-        return
-    }
 
     Scaffold(
         topBar = {
@@ -277,6 +265,7 @@ fun PlayerModeScreen(
                             dimension = com.zaralynchisel.editioncore.DimensionType.OVERWORLD,
                             worldSelector = worldSelector
                         )
+                        rendererRef = renderer
                         renderer.viewConfig.showChunkGrid = showChunkGrid
                         renderer.updateCamera(posX, posY, posZ, yaw, pitch)
                         setRenderer(renderer)
