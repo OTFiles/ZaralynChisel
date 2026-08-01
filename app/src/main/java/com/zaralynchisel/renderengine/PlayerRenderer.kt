@@ -72,7 +72,7 @@ class PlayerRenderer(
 
     /** Chunks waiting on a neighbour's heightmap to rebuild their border walls.
      *  key = neighbour chunk key, value = chunk keys waiting for it. */
-    private val waitingForNeighbor = ConcurrentHashMap<Long, MutableSet<Long>>()
+    private val waitingForNeighbor = java.util.concurrent.ConcurrentHashMap<Long, MutableSet<Long>>()
 
     /** Decoded chunk data whose textures hadn't resolved when the renderer started;
      *  processed once a texture resolver is attached. */
@@ -311,7 +311,7 @@ class PlayerRenderer(
         for ((dx, dz) in listOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1)) {
             val nk = chunkKey(chunkX + dx, chunkZ + dz)
             if (!surfaceHeights.containsKey(nk)) {
-                waitingForNeighbor.computeIfAbsent(nk) { ConcurrentHashMap.newKeySet() }.add(key)
+                waitingForNeighbor.computeIfAbsent(nk) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(key)
             }
         }
         val mesh = buildChunkMesh(chunkX, chunkZ, data)
@@ -380,6 +380,11 @@ class PlayerRenderer(
         val baseX = chunkX * 16
         val baseZ = chunkZ * 16
 
+        fun neighborHeight(nx: Int, nz: Int, colX: Int, colZ: Int): Int {
+            val nh = surfaceHeights[chunkKey(nx, nz)] ?: return Int.MIN_VALUE
+            return nh[colX][colZ]
+        }
+
         fun surfaceAt(x: Int, z: Int): Int {
             // Columns of this chunk first; outside columns consult the already-
             // loaded neighbour chunk heightmaps (cross-chunk cliff walls). If a
@@ -396,11 +401,6 @@ class PlayerRenderer(
             if (h != Int.MIN_VALUE) return h
             val eh = heights[x.coerceIn(0, 15)][z.coerceIn(0, 15)]
             return if (eh == Int.MIN_VALUE) Int.MIN_VALUE else eh
-        }
-
-        fun neighborHeight(nx: Int, nz: Int, colX: Int, colZ: Int): Int {
-            val nh = surfaceHeights[chunkKey(nx, nz)] ?: return Int.MIN_VALUE
-            return nh[colX][colZ]
         }
 
         fun blockAt(x: Int, z: Int, y: Int, top: Int): String {
