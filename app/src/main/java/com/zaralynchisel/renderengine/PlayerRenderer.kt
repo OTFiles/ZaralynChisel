@@ -8,6 +8,7 @@ import com.zaralynchisel.utils.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
@@ -297,7 +298,7 @@ class PlayerRenderer(
         // Resolve all missing textures (parallel network/disk fetches).
         val resolved = kotlinx.coroutines.coroutineScope {
             missing.map { path ->
-                kotlinx.coroutines.async(kotlinx.coroutines.Dispatchers.IO) { path to resolver.resolveBlockTexture(path) }
+                async(kotlinx.coroutines.Dispatchers.IO) { path to resolver.resolveBlockTexture(path) }
             }.map { it.await() }
         }
         var added = false
