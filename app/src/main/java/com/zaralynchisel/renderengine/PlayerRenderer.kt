@@ -70,6 +70,10 @@ class PlayerRenderer(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
+    /** Chunks waiting on a neighbour's heightmap to rebuild their border walls.
+     *  key = neighbour chunk key, value = chunk keys waiting for it. */
+    private val waitingForNeighbor = ConcurrentHashMap<Long, MutableSet<Long>>()
+
     /** Decoded chunk data whose textures hadn't resolved when the renderer started;
      *  processed once a texture resolver is attached. */
     private val pendingData = java.util.concurrent.ConcurrentHashMap<Long, ChunkSurfaceReader.SurfaceData>()
@@ -139,13 +143,16 @@ class PlayerRenderer(
         val bottom = -top
         val left = bottom * aspect
         val right = top * aspect
-        val near = 0.3f
+        val near = 0.05f
         val far = (viewConfig.renderDistance * 16 + 64).toFloat()
         android.opengl.Matrix.frustumM(projectionMatrix, 0, left, right, bottom, top, near, far)
     }
 
     override fun onDrawFrame(gl: GL10?) {
         try {
+            // Reversed-Z depth state is GL state that must survive per frame.
+            GLES30.glDepthRangef(1f, 0f)
+            GLES30.glClearDepthf(0f)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
             if (!glReady) return
 
@@ -226,8 +233,10 @@ class PlayerRenderer(
 
     /** Enqueue loads for chunks within render distance; drop far chunks. */
     private fun ensureChunksAround() {
-        val cx = Math.floorDiv(viewConfig.cameraX.toInt(), 16)
-        val cz = Math.floorDiv(viewConfig.cameraZ.toInt(), 16)
+        // floor(), not truncation: negative camera coords (e.g. -0.5) must map to
+        // chunk -1, otherwise the player's own chunk never loads in negative regions.
+        val cx = Math.floor(viewConfig.cameraX.toDouble() / 16.0).toInt()
+        val cz = Math.floor(viewConfig.cameraZ.toDouble() / 16.0).toInt()
         val rd = viewConfig.renderDistance
         val desired = mutableSetOf<Long>()
         for (dx in -rd..rd) {
@@ -273,6 +282,17 @@ class PlayerRenderer(
             Logger.e("PlayerRenderer: loadChunk ($chunkX,$chunkZ) failed", e)
         } finally {
             loading.remove(key)
+            // Chunks that were waiting for this chunk's heightmap can now rebuild
+            // their border walls (cross-chunk cliffs).
+            val waiters = waitingForNeighbor.remove(key) ?: emptyList()
+            for (wk in waiters) {
+                if (meshes.containsKey(wk) && !loading.contains(wk)) {
+                    val wx = (wk and 0xFFFFFFFFL).toInt()
+                    val wz = ((wk ushr 32) and 0xFFFFFFFFL).toInt()
+                    loading.add(wk)
+                    scope.launch { loadChunk(wx, wz, wk) }
+                }
+            }
         }
     }
 
@@ -285,6 +305,14 @@ class PlayerRenderer(
             // Resolver not initialised yet (screen setup race) — reprocess later.
             pendingData[key] = data
             return
+        }
+        // If a neighbour chunk isn't loaded yet, our border walls are missing.
+        // Register so that neighbour's arrival rebuilds this chunk (cross-chunk cliffs).
+        for ((dx, dz) in listOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1)) {
+            val nk = chunkKey(chunkX + dx, chunkZ + dz)
+            if (!surfaceHeights.containsKey(nk)) {
+                waitingForNeighbor.computeIfAbsent(nk) { ConcurrentHashMap.newKeySet() }.add(key)
+            }
         }
         val mesh = buildChunkMesh(chunkX, chunkZ, data)
         pendingUpload.add(key to mesh)
@@ -353,15 +381,26 @@ class PlayerRenderer(
         val baseZ = chunkZ * 16
 
         fun surfaceAt(x: Int, z: Int): Int {
-            if (x < 0 || x > 15 || z < 0 || z > 15) {
-                // Outside this chunk the terrain is unknown; treat it as the same
-                // height as the edge column so no cliff walls are faked (the
-                // neighbouring chunk renders its own walls).
-                val h = heights[x.coerceIn(0, 15)][z.coerceIn(0, 15)]
-                return if (h == Int.MIN_VALUE) Int.MIN_VALUE else h
+            // Columns of this chunk first; outside columns consult the already-
+            // loaded neighbour chunk heightmaps (cross-chunk cliff walls). If a
+            // neighbour isn't loaded yet, fall back to the edge column so no
+            // fake wall is invented — the neighbour triggers a rebuild when it
+            // arrives (see processChunkData).
+            val h = when {
+                x in 0..15 && z in 0..15 -> heights[x][z]
+                x < 0 -> neighborHeight(chunkX - 1, chunkZ, x + 16, z)
+                x > 15 -> neighborHeight(chunkX + 1, chunkZ, x - 16, z)
+                z < 0 -> neighborHeight(chunkX, chunkZ - 1, x, z + 16)
+                else -> neighborHeight(chunkX, chunkZ + 1, x, z - 16)
             }
-            val h = heights[x][z]
-            return if (h == Int.MIN_VALUE) Int.MIN_VALUE else h
+            if (h != Int.MIN_VALUE) return h
+            val eh = heights[x.coerceIn(0, 15)][z.coerceIn(0, 15)]
+            return if (eh == Int.MIN_VALUE) Int.MIN_VALUE else eh
+        }
+
+        fun neighborHeight(nx: Int, nz: Int, colX: Int, colZ: Int): Int {
+            val nh = surfaceHeights[chunkKey(nx, nz)] ?: return Int.MIN_VALUE
+            return nh[colX][colZ]
         }
 
         fun blockAt(x: Int, z: Int, y: Int, top: Int): String {

@@ -83,7 +83,8 @@ fun PlayerModeScreen(
         val savedY = info?.playerY
         val savedYPlausible = savedY != null && savedY > -60.0 && savedY < 320.0
         if (savedYPlausible) {
-            posY = savedY.toFloat() + 1.5f
+            // saved Y is the FEET position; eye height is +1.62.
+            posY = savedY.toFloat() + 1.62f
             Logger.i("Player spawn: player pos ($pX, $pZ) y=${savedY}")
         } else {
             // No usable saved Y — stand on the surface under the spawn column.
@@ -93,7 +94,8 @@ fun PlayerModeScreen(
                 worldPath, chunkX, chunkZ, com.zaralynchisel.editioncore.DimensionType.OVERWORLD
             )
             val ground = data?.heights?.get(Math.floorMod(pX.toInt(), 16))?.get(Math.floorMod(pZ.toInt(), 16))
-            posY = if (ground != null && ground != Int.MIN_VALUE) ground + 1.5f else 82f
+            // ground = top solid block y; its top face is ground+1; eyes sit +1.62 above it.
+            posY = if (ground != null && ground != Int.MIN_VALUE) ground + 2.62f else 82f
             Logger.i("Player spawn: fallback ($pX, $pZ) ground=${ground ?: "none"}")
         }
 
@@ -140,7 +142,9 @@ fun PlayerModeScreen(
             if (collisionEnabled) {
                 val ground = rendererRef?.groundHeightAt(posX, posZ)
                 if (ground != null) {
-                    val floor = ground + 1.62f // eye height
+                    // ground = top solid block y → top face at ground+1 → eyes at +2.62.
+                    // (1.62 eye height measured from the FEET standing on the top face.)
+                    val floor = ground + 2.62f
                     when {
                         moveUp -> posY += 0.5f    // jump / climb
                         moveDown -> posY -= moveSpeed // dig down (hold to stay under)
