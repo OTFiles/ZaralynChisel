@@ -20,6 +20,10 @@ data class WorldData(
      *  place to center the map view. */
     val playerX: Double? = null,
     val playerZ: Double? = null,
+    /** Player's last Y from level.dat Data.Player.Pos (may be out of the world's
+     *  build range if they fell through the void or the save is from a different
+     *  dimension; callers should validate before trusting it). */
+    val playerY: Double? = null,
     val lastPlayed: Long = 0L,
     val levelData: Map<String, Any?> = emptyMap()
 )

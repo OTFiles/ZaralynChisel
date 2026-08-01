@@ -210,13 +210,15 @@ class WorldSelector(private val context: Context) {
                 // This is where they actually stand — guaranteed-generated terrain — so it
                 // is the best place to center the map. Absent on server saves.
                 var playerX: Double? = null
+                var playerY: Double? = null
                 var playerZ: Double? = null
                 val playerPos = data.getCompound("Player")?.getList("Pos")
                 if (playerPos != null && playerPos.value.size >= 3) {
                     val px = (playerPos.value[0] as? NbtReader.NbtTag.NbtDouble)?.value
+                    val py = (playerPos.value[1] as? NbtReader.NbtTag.NbtDouble)?.value
                     val pz = (playerPos.value[2] as? NbtReader.NbtTag.NbtDouble)?.value
                     if (px != null && pz != null) {
-                        playerX = px; playerZ = pz
+                        playerX = px; playerY = py; playerZ = pz
                         Logger.i("Player last position: ($px, $pz)")
                     }
                 }
@@ -244,6 +246,7 @@ class WorldSelector(private val context: Context) {
                     spawnX = spawnX,
                     spawnZ = spawnZ,
                     playerX = playerX,
+                    playerY = playerY,
                     playerZ = playerZ,
                     lastPlayed = lastPlayed
                 )

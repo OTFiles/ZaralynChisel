@@ -47,21 +47,40 @@ fun PlayerModeScreen(
     var showChunkGrid by remember { mutableStateOf(false) }
     var showWASD by remember { mutableStateOf(true) }
 
-    // Player state — positioned at world spawn once level.dat is read.
+    // Player state — positioned at their last real position (level.dat Player.Pos)
+    // once the world info is read, falling back to world spawn. Y comes from the
+    // saved Y when plausible, otherwise from the column's surface heightmap.
     var posX by remember { mutableFloatStateOf(0f) }
     var posY by remember { mutableFloatStateOf(80f) }
     var posZ by remember { mutableFloatStateOf(0f) }
     var yaw by remember { mutableFloatStateOf(0f) }
     var pitch by remember { mutableFloatStateOf(0f) }
 
-    // Resolve spawn from level.dat so the player starts above generated terrain
-    // (starting at 0,0 previously dropped the player into ungenerated/empty chunks).
+    // Resolve the spawn point. The player's last position beats world spawn
+    // (spawn can sit in ungenerated terrain), and the ground height under that
+    // spot beats a fixed Y (82 can be underground on mountains or in the sky
+    // over oceans).
     LaunchedEffect(worldPath) {
         val info = worldSelector.loadWorldInfo(worldPath)
-        if (info != null) {
-            posX = info.spawnX.toFloat() + 0.5f
-            posZ = info.spawnZ.toFloat() + 0.5f
-            posY = 82f
+        val pX = info?.playerX?.toFloat() ?: (info?.spawnX?.toFloat() ?: 0f)
+        val pZ = info?.playerZ?.toFloat() ?: (info?.spawnZ?.toFloat() ?: 0f)
+        posX = pX + 0.5f
+        posZ = pZ + 0.5f
+        val savedY = info?.playerY
+        val savedYPlausible = savedY != null && savedY > -60.0 && savedY < 320.0
+        if (savedYPlausible) {
+            posY = savedY.toFloat() + 1.5f
+            Logger.i("Player spawn: player pos ($pX, $pZ) y=${savedY}")
+        } else {
+            // No usable saved Y — stand on the surface under the spawn column.
+            val chunkX = kotlin.math.floor(pX / 16f).toInt()
+            val chunkZ = kotlin.math.floor(pZ / 16f).toInt()
+            val data = worldSelector.loadChunkSurfaceAndHeight(
+                worldPath, chunkX, chunkZ, com.zaralynchisel.editioncore.DimensionType.OVERWORLD
+            )
+            val ground = data?.heights?.get(Math.floorMod(pX.toInt(), 16))?.get(Math.floorMod(pZ.toInt(), 16))
+            posY = if (ground != null && ground != Int.MIN_VALUE) ground + 1.5f else 82f
+            Logger.i("Player spawn: fallback ($pX, $pZ) ground=${ground ?: "none"}")
         }
     }
 
@@ -229,6 +248,22 @@ fun PlayerModeScreen(
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Keep a reference so the GL context can be torn down when leaving.
+            var glViewRef by remember { mutableStateOf<GLSurfaceView?>(null) }
+
+            // On exit: stop the GL thread, cancel the loader scope and delete GL
+            // resources on the GL thread (queueEvent) so nothing leaks or crashes.
+            DisposableEffect(Unit) {
+                onDispose {
+                    glViewRef?.let { v ->
+                        (v.tag as? PlayerRenderer)?.let { r ->
+                            v.queueEvent { r.cleanup() }
+                        }
+                        v.onPause()
+                    }
+                }
+            }
+
             // OpenGL view with touch gesture handling
             AndroidView(
                 factory = { ctx ->
@@ -281,6 +316,7 @@ fun PlayerModeScreen(
                     }
                 },
                 update = { glView ->
+                    glViewRef = glView
                     (glView.tag as? PlayerRenderer)?.let { r ->
                         r.viewConfig.showChunkGrid = showChunkGrid
                         r.updateCamera(posX, posY, posZ, yaw, pitch)
