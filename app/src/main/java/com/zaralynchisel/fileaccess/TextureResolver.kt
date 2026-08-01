@@ -159,7 +159,8 @@ class TextureResolver(private val context: Context) {
     private fun textureCandidates(block: String): List<String> {
         val out = LinkedHashSet<String>()
         val ns = if (block.contains(":")) block.substringBefore(":") else "minecraft"
-        val id = block.substringAfter(":")
+        // "minecraft:block/stone" → "stone" (strip namespace AND the block/ prefix)
+        val id = block.substringAfter(":").removePrefix("block/")
         fun p(name: String) = "$ns:block/$name"
 
         // Direct special cases (verified against the 1.21 client jar).

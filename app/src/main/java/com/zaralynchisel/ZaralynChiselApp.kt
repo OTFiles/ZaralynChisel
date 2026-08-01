@@ -29,6 +29,15 @@ class ZaralynChiselApp : Application() {
             File(filesDir, "logs")
         }
         Logger.init(logDir)
+        // Catch everything uncaught so crashes land in the in-app log instead of
+        // vanishing (the previous handler is preserved and still receives it).
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                Logger.e("UNCAUGHT on ${thread.name}: ${throwable.javaClass.name}: ${throwable.message}", throwable)
+            } catch (_: Throwable) { }
+            prev?.uncaughtException(thread, throwable)
+        }
         Logger.i("ZaralynChiselApp.onCreate — v${com.zaralynchisel.BuildConfig.VERSION_NAME}, logDir=$logDir")
     }
 

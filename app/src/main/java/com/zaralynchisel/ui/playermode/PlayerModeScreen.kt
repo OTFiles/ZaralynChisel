@@ -293,15 +293,20 @@ fun PlayerModeScreen(
                 lifecycle.addObserver(observer)
                 onDispose {
                     lifecycle.removeObserver(observer)
+                    Logger.d("PlayerMode onDispose: tearing down GL view")
                     glViewRef?.let { v ->
                         (v.tag as? PlayerRenderer)?.let { r ->
-                            v.queueEvent { r.cleanup() }
+                            v.queueEvent {
+                                Logger.d("PlayerMode GL thread: renderer.cleanup()")
+                                r.cleanup()
+                            }
                         }
                         v.onPause()
                     }
                     try {
                         textureResolver.close()
                     } catch (_: Exception) { }
+                    Logger.d("PlayerMode onDispose: done")
                 }
             }
 
