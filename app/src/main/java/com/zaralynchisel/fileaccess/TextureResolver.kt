@@ -25,6 +25,9 @@ class TextureResolver(private val context: Context) {
     private var version: String = "unknown"
     private var isInitialized = false
 
+    /** Asset index is ~MBs of JSON — parse it once and reuse. */
+    private var cachedIndex: Map<String, AssetsExtractor.AssetObject>? = null
+
     /**
      * Initialize the texture resolver with a world path.
      * This locates the .minecraft directory and mods folder.
@@ -48,8 +51,12 @@ class TextureResolver(private val context: Context) {
     }
 
     /**
-     * Resolve a block texture by its resource path.
+     * Resolve a block texture by its resource path ("minecraft:block/stone").
      * Returns null only if ALL sources fail.
+     *
+     * The path may not exist verbatim (stairs/slabs reuse the base block's
+     * texture, crafting_table has only _top/_side/_front, wood reuses log
+     * textures...), so each source tries a chain of candidate paths.
      */
     suspend fun resolveBlockTexture(blockResourcePath: String): ByteArray? {
         if (!isInitialized) {
@@ -57,91 +64,137 @@ class TextureResolver(private val context: Context) {
             return null
         }
 
-        // Priority 1: Local assets index
+        val candidates = textureCandidates(blockResourcePath)
+
+        // Priority 1: Local assets index (loaded once, reused across sources)
         if (minecraftDir != null) {
-            try {
-                val fromAssets = assetsExtractor.getBlockTexture(
-                    minecraftDir!!, version, blockResourcePath
-                )
-                if (fromAssets != null) {
-                    Logger.d("Texture resolved from assets: $blockResourcePath")
-                    return fromAssets
+            val index = cachedIndex ?: assetsExtractor.loadAssetIndex(minecraftDir!!, version)
+            if (index != null) {
+                cachedIndex = index
+                for (c in candidates) {
+                    val assetObject = index[toAssetKey(c)]
+                    if (assetObject != null) {
+                        val fromAssets = assetsExtractor.getTextureByHash(minecraftDir!!, assetObject.hash)
+                        if (fromAssets != null) {
+                            Logger.d("Texture resolved from assets: $blockResourcePath")
+                            return fromAssets
+                        }
+                    }
                 }
-            } catch (e: Exception) {
-                Logger.w("Assets lookup failed for $blockResourcePath: ${e.message}")
             }
         }
 
         // Priority 2: the game's client jar (vanilla textures; some launchers
-        // like FCL have no Mojang-style asset index). Faster and more reliable
-        // than scanning mod jars, so it comes before the mods.
+        // like FCL have no Mojang-style asset index).
         if (minecraftDir != null) {
-            try {
-                val fromJar = assetsExtractor.getTextureFromVersionJar(minecraftDir!!, version, blockResourcePath)
-                if (fromJar != null) {
-                    Logger.d("Texture resolved from version jar: $blockResourcePath")
-                    return fromJar
+            for (c in candidates) {
+                try {
+                    val fromJar = assetsExtractor.getTextureFromVersionJar(minecraftDir!!, version, c)
+                    if (fromJar != null) {
+                        Logger.d("Texture resolved from version jar: $blockResourcePath")
+                        return fromJar
+                    }
+                } catch (e: Exception) {
+                    Logger.w("Version jar lookup failed for $c: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Logger.w("Version jar lookup failed for $blockResourcePath: ${e.message}")
             }
         }
 
         // Priority 3: Mod JARs
         if (modsDir != null) {
-            try {
-                val namespace = if (blockResourcePath.contains(":")) {
-                    blockResourcePath.substringBefore(":")
-                } else {
-                    "minecraft"
-                }
-                val path = blockResourcePath.substringAfter(":")
-                val textureName = path.substringAfterLast("/")
+            for (c in candidates) {
+                try {
+                    val namespace = if (c.contains(":")) c.substringBefore(":") else "minecraft"
+                    val path = c.substringAfter(":")
+                    val textureName = path.substringAfterLast("/")
 
-                val fromMod = modsExtractor.getTextureFromMods(modsDir!!, namespace, textureName)
-                if (fromMod != null) {
-                    Logger.d("Texture resolved from mod: $blockResourcePath")
-                    return fromMod
+                    val fromMod = modsExtractor.getTextureFromMods(modsDir!!, namespace, textureName)
+                    if (fromMod != null) {
+                        Logger.d("Texture resolved from mod: $blockResourcePath")
+                        return fromMod
+                    }
+                } catch (e: Exception) {
+                    Logger.w("Mod lookup failed for $c: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Logger.w("Mod lookup failed for $blockResourcePath: ${e.message}")
             }
         }
 
         // Priority 4: Network download (if we have the hash from the index)
         if (minecraftDir != null) {
-            try {
-                val index = assetsExtractor.loadAssetIndex(minecraftDir!!, version)
-                if (index != null) {
-                    // Asset index keys use the "<namespace>: <path>" form, e.g.
-                    // "minecraft: textures/block/stone.png" (note the space).
-                    val namespace = if (blockResourcePath.contains(":")) {
-                        blockResourcePath.substringBefore(":")
-                    } else {
-                        "minecraft"
-                    }
-                    val path = blockResourcePath.substringAfter(":")
-                    val assetPath = "$namespace: textures/$path.png"
-                    val assetObject = index[assetPath]
+            val index = cachedIndex ?: assetsExtractor.loadAssetIndex(minecraftDir!!, version)
+            if (index != null) {
+                cachedIndex = index
+                for (c in candidates) {
+                    val assetObject = index[toAssetKey(c)]
                     if (assetObject != null) {
-                        val fromNetwork = networkFetcher.downloadTexture(
-                            assetObject.hash,
-                            prefs.textureMirrorUrl
-                        )
+                        val fromNetwork = networkFetcher.downloadTexture(assetObject.hash, prefs.textureMirrorUrl)
                         if (fromNetwork != null) {
                             Logger.d("Texture resolved from network: $blockResourcePath")
                             return fromNetwork
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Logger.w("Network download failed for $blockResourcePath: ${e.message}")
             }
         }
 
-        // Priority 4: All sources failed
+        // All sources failed
         Logger.w("All texture sources failed for: $blockResourcePath")
         return null
+    }
+
+    /** Asset index keys use the "<namespace>: <path>" form (note the space). */
+    private fun toAssetKey(resourcePath: String): String {
+        val namespace = if (resourcePath.contains(":")) resourcePath.substringBefore(":") else "minecraft"
+        val path = resourcePath.substringAfter(":")
+        return "$namespace: textures/$path.png"
+    }
+
+    /**
+     * Candidate texture paths for a block, most specific first. Handles blocks
+     * whose textures are named differently from the block id (crafting_table →
+     * crafting_table_top, stone_brick_stairs → stone_bricks, cherry_wood →
+     * cherry_log, glass_pane → glass_pane_top, tall_seagrass → _top ...) plus
+     * generic _top/_side/_front/_still variants as a last resort.
+     */
+    private fun textureCandidates(block: String): List<String> {
+        val out = LinkedHashSet<String>()
+        val ns = if (block.contains(":")) block.substringBefore(":") else "minecraft"
+        val id = block.substringAfter(":")
+        fun p(name: String) = "$ns:block/$name"
+
+        // Direct special cases (verified against the 1.21 client jar).
+        when (id) {
+            "glass_pane" -> return listOf(p("glass_pane_top"), p("glass_pane"))
+            "crafting_table" -> return listOf(p("crafting_table_top"), p("crafting_table_front"), p("crafting_table_side"))
+            "tall_seagrass" -> return listOf(p("tall_seagrass_top"), p("tall_seagrass_bottom"))
+            "bamboo" -> return listOf(p("bamboo_stalk"), p("bamboo_block"))
+        }
+        // Blocks that reuse the base block's texture (stairs/slabs/walls/...).
+        for (suffix in listOf(
+            "_stairs", "_slab", "_wall", "_fence_gate", "_fence", "_button",
+            "_pressure_plate", "_door", "_trapdoor", "_torch", "_rail", "_sign",
+            "_banner", "_carpet", "_sapling", "_flower_pot", "_bed", "_chest"
+        )) {
+            if (id.endsWith(suffix)) {
+                val base = id.removeSuffix(suffix)
+                out.add(p(base))
+                out.add(p(base + "s"))   // stone_brick_stairs → stone_bricks
+                out.add(p(base + "_top"))
+                break
+            }
+        }
+        // Bark blocks reuse the log texture (cherry_wood → cherry_log).
+        if (id.endsWith("_wood") && !id.endsWith("_wooden_")) {
+            out.add(p(id.removeSuffix("_wood") + "_log"))
+            out.add(p(id.removeSuffix("_wood") + "_log_top"))
+        }
+        // Generic variants.
+        out.add(p(id + "_top"))
+        out.add(p(id + "_side"))
+        out.add(p(id + "_front"))
+        out.add(p(id + "_still"))
+        out.add(p(id))
+        return out.toList()
     }
 
     /**

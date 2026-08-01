@@ -20,6 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.zaralynchisel.renderengine.PlayerRenderer
 import com.zaralynchisel.utils.Logger
 import kotlinx.coroutines.delay
@@ -278,14 +281,26 @@ fun PlayerModeScreen(
             // On exit: stop the GL thread, cancel the loader scope and delete GL
             // resources on the GL thread (queueEvent) so nothing leaks or crashes.
             DisposableEffect(Unit) {
+                val lifecycle = LocalLifecycleOwner.current.lifecycle
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_STOP -> glViewRef?.onPause()
+                        Lifecycle.Event.ON_START -> glViewRef?.onResume()
+                        else -> {}
+                    }
+                }
+                lifecycle.addObserver(observer)
                 onDispose {
+                    lifecycle.removeObserver(observer)
                     glViewRef?.let { v ->
                         (v.tag as? PlayerRenderer)?.let { r ->
                             v.queueEvent { r.cleanup() }
                         }
                         v.onPause()
                     }
-                    textureResolver.close()
+                    try {
+                        textureResolver.close()
+                    } catch (_: Exception) { }
                 }
             }
 

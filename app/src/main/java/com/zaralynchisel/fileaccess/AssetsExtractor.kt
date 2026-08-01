@@ -26,6 +26,10 @@ class AssetsExtractor(private val context: Context) {
     @Volatile
     private var versionJar: java.util.zip.ZipFile? = null
 
+    /** The world path passed to [locateMinecraftDir]; its versions/<dir> ancestor
+     *  identifies the exact launcher/loader directory (1.21.1-NeoForge, vanilla...). */
+    private var worldPath: String? = null
+
     /**
      * Result of a texture lookup.
      */
@@ -55,6 +59,7 @@ class AssetsExtractor(private val context: Context) {
      */
     suspend fun locateMinecraftDir(worldPath: String): String? {
         return withFileIO {
+            this@AssetsExtractor.worldPath = worldPath
             // Walk up from the world directory: the .minecraft folder can be any
             // number of levels up (e.g. FCL: saves/<world> under versions/<ver>),
             // so keep climbing until a directory that owns assets/ is found.
@@ -208,10 +213,25 @@ class AssetsExtractor(private val context: Context) {
             versionJar?.let { return it }
             val versionsDir = File(minecraftDir, "versions")
             val dirs = versionsDir.listFiles { f -> f.isDirectory }?.toList() ?: emptyList()
-            // Prefer a version directory matching the requested version id.
-            val preferred = dirs.firstOrNull { d ->
-                d.name == version || d.name.startsWith(version) || version.startsWith(d.name)
-            } ?: dirs.firstOrNull()
+
+            // The save lives under versions/<dir>/saves/<world>, so its parent
+            // directory name identifies the exact loader install (e.g.
+            // 1.21.1-NeoForge). Prefer that, then loader-flavoured ids, then
+            // plain version ids, then anything.
+            val worldVersionDir = worldPath?.let { File(it).parentFile?.parentFile?.name }
+            val knownLoaders = listOf("neoforge", "forge", "fabric", "quilt")
+            val scored = dirs.map { d ->
+                val score = when {
+                    d.name == worldVersionDir -> 1000
+                    d.name == version -> 30
+                    d.name.startsWith(version) &&
+                        knownLoaders.any { d.name.lowercase().contains(it) } -> 20
+                    d.name.startsWith(version) || version.startsWith(d.name) -> 10
+                    else -> 0
+                }
+                d to score
+            }.sortedByDescending { it.second }
+            val preferred = scored.firstOrNull { it.second > 0 }?.first ?: dirs.firstOrNull()
             if (preferred == null) {
                 Logger.w("No version directories under ${versionsDir.absolutePath}")
                 return null
@@ -236,7 +256,9 @@ class AssetsExtractor(private val context: Context) {
     /** Close the cached version jar (call when the texture resolver is discarded). */
     fun close() {
         synchronized(this) {
-            versionJar?.close()
+            try {
+                versionJar?.close()
+            } catch (_: Exception) { }
             versionJar = null
         }
     }

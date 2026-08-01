@@ -486,12 +486,18 @@ class PlayerRenderer(
 
     fun cleanup() {
         scope.cancel()
-        for ((_, handles) in meshes) deleteHandles(handles)
-        meshes.clear()
-        surfaceHeights.clear()
-        pendingData.clear()
-        atlas.deleteOnGl()
-        if (shaderProgram != 0) GLES30.glDeleteProgram(shaderProgram)
+        try {
+            for ((_, handles) in meshes) deleteHandles(handles)
+            meshes.clear()
+            surfaceHeights.clear()
+            pendingData.clear()
+            atlas.deleteOnGl()
+            if (shaderProgram != 0) GLES30.glDeleteProgram(shaderProgram)
+            shaderProgram = 0
+        } catch (e: Exception) {
+            // GL context may already be gone (surface torn down) — nothing to do.
+            Logger.w("PlayerRenderer.cleanup: ${e.message}")
+        }
     }
 
     private fun chunkKey(x: Int, z: Int): Long = (x.toLong() shl 32) or (z.toLong() and 0xFFFFFFFFL)

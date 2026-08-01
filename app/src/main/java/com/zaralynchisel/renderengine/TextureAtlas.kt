@@ -98,7 +98,7 @@ class TextureAtlas {
                 TILE_SIZE, TILE_SIZE, LAYER_COUNT, 0,
                 GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
             )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
@@ -106,7 +106,6 @@ class TextureAtlas {
             for (i in 0 until nextLayer) {
                 layerBitmaps[i]?.let { uploadLayer(i, it) }
             }
-            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D_ARRAY)
             return
         }
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D_ARRAY, glTexture)
@@ -114,7 +113,6 @@ class TextureAtlas {
             val entry = pendingUploads.poll() ?: break
             uploadLayer(entry.first, entry.second)
         }
-        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D_ARRAY)
     }
 
     /** Bind the array texture (GL thread). */
