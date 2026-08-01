@@ -50,19 +50,32 @@ class AssetsExtractor(private val context: Context) {
      */
     suspend fun locateMinecraftDir(worldPath: String): String? {
         return withFileIO {
-            val worldDir = File(worldPath)
+            // Walk up from the world directory: the .minecraft folder can be any
+            // number of levels up (e.g. FCL: saves/<world> under versions/<ver>),
+            // so keep climbing until a directory that owns assets/ is found.
+            var cur: File? = File(worldPath)
+            while (cur != null) {
+                val minecraft = File(cur, ".minecraft")
+                if (minecraft.exists() && File(minecraft, "assets").exists()) {
+                    Logger.d("Found .minecraft at: ${minecraft.absolutePath}")
+                    return@withFileIO minecraft.absolutePath
+                }
+                // The directory itself is .minecraft (contains assets/)
+                if (cur.name == ".minecraft" && File(cur, "assets").exists()) {
+                    Logger.d("Found .minecraft at: ${cur.absolutePath}")
+                    return@withFileIO cur.absolutePath
+                }
+                cur = cur.parentFile
+            }
 
-            // Try common parent structures
+            // Fallbacks for launchers with a fixed install location.
             val candidates = listOf(
-                worldDir.parentFile?.let { File(it, ".minecraft") },
-                worldDir.parentFile?.parentFile?.let { File(it, ".minecraft") },
                 File("/storage/emulated/0/games/com.mojang"),
                 File("/storage/emulated/0/Android/data/com.mojang.minecraftpe/files/games/com.mojang"),
                 File("/data/data/com.mojang.minecraftpe/files/games/com.mojang")
             )
-
             for (candidate in candidates) {
-                if (candidate != null && candidate.exists() && File(candidate, "assets").exists()) {
+                if (candidate.exists() && File(candidate, "assets").exists()) {
                     Logger.d("Found .minecraft at: ${candidate.absolutePath}")
                     return@withFileIO candidate.absolutePath
                 }

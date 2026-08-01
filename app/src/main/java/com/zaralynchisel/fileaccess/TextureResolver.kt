@@ -98,7 +98,15 @@ class TextureResolver(private val context: Context) {
             try {
                 val index = assetsExtractor.loadAssetIndex(minecraftDir!!, version)
                 if (index != null) {
-                    val assetPath = "$blockResourcePath.png"
+                    // Asset index keys use the "<namespace>: <path>" form, e.g.
+                    // "minecraft: textures/block/stone.png" (note the space).
+                    val namespace = if (blockResourcePath.contains(":")) {
+                        blockResourcePath.substringBefore(":")
+                    } else {
+                        "minecraft"
+                    }
+                    val path = blockResourcePath.substringAfter(":")
+                    val assetPath = "$namespace: textures/$path.png"
                     val assetObject = index[assetPath]
                     if (assetObject != null) {
                         val fromNetwork = networkFetcher.downloadTexture(
