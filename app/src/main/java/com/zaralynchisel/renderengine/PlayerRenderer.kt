@@ -210,16 +210,14 @@ class PlayerRenderer(
                 mesh.vertexBuffer, GLES30.GL_STATIC_DRAW
             )
 
-            // pos(3) + normal(3) + uv(2) + tileLayer(1)
-            val stride = 9 * 4
+            // pos(3) + normal(3) + uv(2)
+            val stride = 8 * 4
             GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
             GLES30.glEnableVertexAttribArray(0)
             GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, stride, 3 * 4)
             GLES30.glEnableVertexAttribArray(1)
             GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, stride, 6 * 4)
             GLES30.glEnableVertexAttribArray(2)
-            GLES30.glVertexAttribPointer(3, 1, GLES30.GL_FLOAT, false, stride, 8 * 4)
-            GLES30.glEnableVertexAttribArray(3)
 
             GLES30.glBindVertexArray(0)
             meshes[key] = intArrayOf(vao[0], mesh.vertexCount, vbo[0])
@@ -373,14 +371,16 @@ class PlayerRenderer(
             return stack.getOrNull(idx) ?: "minecraft:stone"
         }
 
-        fun emitFace(bx: Float, by: Float, bz: Float, face: Face, layer: Int) {
+        fun emitFace(bx: Float, by: Float, bz: Float, face: Face, tile: Int) {
             val v = face.vertices
+            val uv = atlas.uvOrigin(tile)
+            val u0 = uv[0]
+            val v0 = uv[1]
             for (k in 0..3) {
                 verts.add(bx + v[k * 3]); verts.add(by + v[k * 3 + 1]); verts.add(bz + v[k * 3 + 2])
                 verts.add(face.nx); verts.add(face.ny); verts.add(face.nz)
-                verts.add(if (k == 1 || k == 2) 1f else 0f)
-                verts.add(if (k == 2 || k == 3) 1f else 0f)
-                verts.add(layer.toFloat())
+                verts.add(u0 + (if (k == 1 || k == 2) 1f else 0f) * TextureAtlas.TILE_UV)
+                verts.add(v0 + (if (k == 2 || k == 3) 1f else 0f) * TextureAtlas.TILE_UV)
             }
         }
 
@@ -405,23 +405,23 @@ class PlayerRenderer(
                     if (y == top) {
                         val p = topTexturePath(block)
                         paths.add(p)
-                        emitFace(bx, by, bz, TOP_FACE, atlas.layerFor(p))
+                        emitFace(bx, by, bz, TOP_FACE, atlas.tileFor(p))
                     }
                     if (surfaceAt(x - 1, z) < y) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, WEST_FACE, atlas.layerFor(p))
+                        emitFace(bx, by, bz, WEST_FACE, atlas.tileFor(p))
                     }
                     if (surfaceAt(x + 1, z) < y) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, EAST_FACE, atlas.layerFor(p))
+                        emitFace(bx, by, bz, EAST_FACE, atlas.tileFor(p))
                     }
                     if (surfaceAt(x, z - 1) < y) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, NORTH_FACE, atlas.layerFor(p))
+                        emitFace(bx, by, bz, NORTH_FACE, atlas.tileFor(p))
                     }
                     if (surfaceAt(x, z + 1) < y) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, SOUTH_FACE, atlas.layerFor(p))
+                        emitFace(bx, by, bz, SOUTH_FACE, atlas.tileFor(p))
                     }
                 }
             }
@@ -564,35 +564,31 @@ class PlayerRenderer(
             floatArrayOf(1f,0f,0f, 0f,0f,0f, 0f,1f,0f, 1f,1f,0f), 0f, 0f, -1f)
 
         // Terrain shader: textured blocks, lit by a fixed world-space directional
-        // light. Texture layer = atlas array-texture layer (from aLayer).
+        // light. Pixels stay crisp: NEAREST filtering + mipmaps (atlas side).
         private const val TERRAIN_VERTEX_SHADER = """
             #version 300 es
             layout(location = 0) in vec3 aPosition;
             layout(location = 1) in vec3 aNormal;
             layout(location = 2) in vec2 aUV;
-            layout(location = 3) in float aLayer;
             uniform mat4 uVP;
             out vec2 vUV;
             out vec3 vNormal;
-            out float vLayer;
             void main() {
                 gl_Position = uVP * vec4(aPosition, 1.0);
                 vUV = aUV;
                 vNormal = aNormal;
-                vLayer = aLayer;
             }
         """
 
         private const val TERRAIN_FRAGMENT_SHADER = """
             #version 300 es
             precision mediump float;
-            uniform sampler2DArray uTex;
+            uniform sampler2D uTex;
             in vec2 vUV;
             in vec3 vNormal;
-            in float vLayer;
             out vec4 fragColor;
             void main() {
-                vec4 tex = texture(uTex, vec3(vUV, vLayer));
+                vec4 tex = texture(uTex, vUV);
                 vec3 normal = normalize(vNormal);
                 vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                 float diff = max(dot(normal, lightDir), 0.0);
