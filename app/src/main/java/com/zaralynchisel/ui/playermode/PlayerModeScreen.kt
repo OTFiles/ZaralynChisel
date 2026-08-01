@@ -280,8 +280,9 @@ fun PlayerModeScreen(
 
             // On exit: stop the GL thread, cancel the loader scope and delete GL
             // resources on the GL thread (queueEvent) so nothing leaks or crashes.
-            DisposableEffect(Unit) {
-                val lifecycle = LocalLifecycleOwner.current.lifecycle
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner) {
+                val lifecycle = lifecycleOwner.lifecycle
                 val observer = LifecycleEventObserver { _, event ->
                     when (event) {
                         Lifecycle.Event.ON_STOP -> glViewRef?.onPause()
