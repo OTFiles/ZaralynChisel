@@ -124,6 +124,10 @@ class TextureAtlas {
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
             return
         }
+        // Nothing new to upload: skip bind + mipmap entirely. Regenerating
+        // mipmaps every frame (even unchanged) made some drivers glitch the
+        // texture — visible as chunks flickering in and out.
+        if (pendingTiles.isEmpty()) return
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, glTexture)
         while (true) {
             val entry = pendingTiles.poll() ?: break

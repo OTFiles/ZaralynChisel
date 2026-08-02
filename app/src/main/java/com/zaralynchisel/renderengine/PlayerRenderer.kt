@@ -84,6 +84,9 @@ class PlayerRenderer(
         private set
 
     @Volatile
+    private var nanLogged = false
+
+    @Volatile
     private var textureResolver: com.zaralynchisel.fileaccess.TextureResolver? = null
 
     private val atlas = TextureAtlas()
@@ -154,6 +157,16 @@ class PlayerRenderer(
             GLES30.glDepthRangef(1f, 0f)
             GLES30.glClearDepthf(0f)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+            // Camera sanity: NaN coordinates would collapse the chunk set to
+            // (0,0) and cause load/drop cycling — log it once if it happens.
+            if (viewConfig.cameraX.isNaN() || viewConfig.cameraY.isNaN() || viewConfig.cameraZ.isNaN()) {
+                if (!nanLogged) {
+                    nanLogged = true
+                    Logger.e("Camera coordinate is NaN: ${viewConfig.cameraX},${viewConfig.cameraY},${viewConfig.cameraZ}")
+                }
+            } else if (nanLogged) {
+                nanLogged = false
+            }
             if (!glReady) return
 
             // Camera: look in the yaw/pitch direction (yaw=0 → -Z forward).
@@ -254,6 +267,9 @@ class PlayerRenderer(
         }
         // Drop chunks no longer needed.
         val drop = meshes.keys.filter { it !in desired }
+        if (drop.isNotEmpty()) {
+            Logger.d("ensureChunksAround: dropping ${drop.size} chunks (cx=$cx,cz=$cz, cam=${viewConfig.cameraX},${viewConfig.cameraZ})")
+        }
         for (key in drop) {
             meshes.remove(key)?.let { deleteHandles(it) }
             surfaceHeights.remove(key)
@@ -285,11 +301,15 @@ class PlayerRenderer(
             // Chunks that were waiting for this chunk's heightmap can now rebuild
             // their border walls (cross-chunk cliffs).
             val waiters = waitingForNeighbor.remove(key) ?: emptyList()
+            if (waiters.isNotEmpty()) {
+                Logger.d("loadChunk ($chunkX,$chunkZ): notifying ${waiters.size} waiting chunk(s)")
+            }
             for (wk in waiters) {
                 if (meshes.containsKey(wk) && !loading.contains(wk)) {
                     val wx = (wk and 0xFFFFFFFFL).toInt()
                     val wz = ((wk ushr 32) and 0xFFFFFFFFL).toInt()
                     loading.add(wk)
+                    Logger.d("loadChunk: rebuilding neighbour ($wx,$wz) for cross-chunk walls")
                     scope.launch { loadChunk(wx, wz, wk) }
                 }
             }

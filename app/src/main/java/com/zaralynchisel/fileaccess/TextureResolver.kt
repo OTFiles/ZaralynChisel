@@ -181,6 +181,10 @@ class TextureResolver(private val context: Context) {
                 out.add(p(base))
                 out.add(p(base + "s"))   // stone_brick_stairs → stone_bricks
                 out.add(p(base + "_top"))
+                // Stairs/slabs are textured with the matching planks tile.
+                if (suffix == "_stairs" || suffix == "_slab") {
+                    out.add(p(base + "_planks"))
+                }
                 break
             }
         }
