@@ -70,10 +70,6 @@ class PlayerRenderer(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
-    /** Chunks waiting on a neighbour's heightmap to rebuild their border walls.
-     *  key = neighbour chunk key, value = chunk keys waiting for it. */
-    private val waitingForNeighbor = java.util.concurrent.ConcurrentHashMap<Long, MutableSet<Long>>()
-
     /** Decoded chunk data whose textures hadn't resolved when the renderer started;
      *  processed once a texture resolver is attached. */
     private val pendingData = java.util.concurrent.ConcurrentHashMap<Long, ChunkSurfaceReader.SurfaceData>()
@@ -142,12 +138,15 @@ class PlayerRenderer(
         GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
         val aspect = viewportWidth.toFloat() / viewportHeight.toFloat()
         val fovRad = Math.toRadians(viewConfig.fov.toDouble())
-        val top = (1.0 / Math.tan(fovRad / 2.0)).toFloat()
+        val near = 0.05f
+        val far = (viewConfig.renderDistance * 16 + 64).toFloat()
+        // frustumM expects the NEAR-PLANE extents, not a unitless angle ratio:
+        // half-height = near * tan(fov/2). Passing 1/tan(fov/2) directly made the
+        // actual FOV ~176° — a fisheye stretch on every block.
+        val top = (near * Math.tan(fovRad / 2.0)).toFloat()
         val bottom = -top
         val left = bottom * aspect
         val right = top * aspect
-        val near = 0.05f
-        val far = (viewConfig.renderDistance * 16 + 64).toFloat()
         android.opengl.Matrix.frustumM(projectionMatrix, 0, left, right, bottom, top, near, far)
     }
 
@@ -298,21 +297,6 @@ class PlayerRenderer(
             Logger.e("PlayerRenderer: loadChunk ($chunkX,$chunkZ) failed", e)
         } finally {
             loading.remove(key)
-            // Chunks that were waiting for this chunk's heightmap can now rebuild
-            // their border walls (cross-chunk cliffs).
-            val waiters = waitingForNeighbor.remove(key) ?: emptyList()
-            if (waiters.isNotEmpty()) {
-                Logger.d("loadChunk ($chunkX,$chunkZ): notifying ${waiters.size} waiting chunk(s)")
-            }
-            for (wk in waiters) {
-                if (meshes.containsKey(wk) && !loading.contains(wk)) {
-                    val wx = (wk and 0xFFFFFFFFL).toInt()
-                    val wz = ((wk ushr 32) and 0xFFFFFFFFL).toInt()
-                    loading.add(wk)
-                    Logger.d("loadChunk: rebuilding neighbour ($wx,$wz) for cross-chunk walls")
-                    scope.launch { loadChunk(wx, wz, wk) }
-                }
-            }
         }
     }
 
@@ -325,14 +309,6 @@ class PlayerRenderer(
             // Resolver not initialised yet (screen setup race) — reprocess later.
             pendingData[key] = data
             return
-        }
-        // If a neighbour chunk isn't loaded yet, our border walls are missing.
-        // Register so that neighbour's arrival rebuilds this chunk (cross-chunk cliffs).
-        for ((dx, dz) in listOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1)) {
-            val nk = chunkKey(chunkX + dx, chunkZ + dz)
-            if (!surfaceHeights.containsKey(nk)) {
-                waitingForNeighbor.computeIfAbsent(nk) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(key)
-            }
         }
         val mesh = buildChunkMesh(chunkX, chunkZ, data)
         pendingUpload.add(key to mesh)
