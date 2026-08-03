@@ -52,19 +52,20 @@ class PlayerRenderer(
         cameraZ = spawnZ.toFloat() + 0.5f
     )
 
-    /** CPU-side chunk heights kept alongside [meshes] for ground-collision
-     *  queries (PlayerModeScreen asks for the surface height under the player). */
-    private val surfaceHeights = java.util.concurrent.ConcurrentHashMap<Long, Array<IntArray>>()
+    /** CPU-side chunk data kept alongside [meshes]: heights for ground-collision
+     *  (PlayerModeScreen asks for the surface height under the player) and the
+     *  surface blocks + below-surface stacks for real face-exposure tests. */
+    private val chunkDataCache = java.util.concurrent.ConcurrentHashMap<Long, ChunkSurfaceReader.SurfaceData>()
 
     /** Surface height (absolute Y) of the column containing (x,z), or null when
      *  that chunk hasn't loaded (or has no surface). Thread-safe. */
     fun groundHeightAt(x: Float, z: Float): Float? {
         val cx = kotlin.math.floor(x / 16f).toInt()
         val cz = kotlin.math.floor(z / 16f).toInt()
-        val heights = surfaceHeights[chunkKey(cx, cz)] ?: return null
+        val data = chunkDataCache[chunkKey(cx, cz)] ?: return null
         val colX = Math.floorMod(kotlin.math.floor(x).toInt(), 16)
         val colZ = Math.floorMod(kotlin.math.floor(z).toInt(), 16)
-        val h = heights[colX][colZ]
+        val h = data.heights[colX][colZ]
         return if (h == Int.MIN_VALUE) null else h.toFloat()
     }
 
@@ -273,7 +274,7 @@ class PlayerRenderer(
         }
         for (key in drop) {
             meshes.remove(key)?.let { deleteHandles(it) }
-            surfaceHeights.remove(key)
+            chunkDataCache.remove(key)
         }
     }
 
@@ -314,7 +315,7 @@ class PlayerRenderer(
         }
         val mesh = buildChunkMesh(chunkX, chunkZ, data)
         pendingUpload.add(key to mesh)
-        surfaceHeights[key] = data.heights
+        chunkDataCache[key] = data
 
         val missing = mesh.paths.filter { !atlas.has(it) }
         if (missing.isEmpty()) return
@@ -380,27 +381,32 @@ class PlayerRenderer(
         val WHITE = floatArrayOf(1f, 1f, 1f, 1f)
         var grassTint: FloatArray = WHITE
 
-        fun neighborHeight(nx: Int, nz: Int, colX: Int, colZ: Int): Int {
-            val nh = surfaceHeights[chunkKey(nx, nz)] ?: return Int.MIN_VALUE
-            return nh[colX][colZ]
+        /** Is the column (colX, colZ) of chunk (nx, nz) solid at height y?
+         *  Columns beyond the 40-block stack depth count as AIR so exposed cliff
+         *  walls keep rendering; the per-column loop never goes deeper than that. */
+        fun solidAt(nx: Int, nz: Int, colX: Int, colZ: Int, y: Int): Boolean {
+            val d = if (nx == chunkX && nz == chunkZ) data else chunkDataCache[chunkKey(nx, nz)]
+            if (d == null) {
+                // Neighbour chunk not loaded: mirror our edge column so no fake
+                // wall is invented along the chunk border.
+                val eh = heights[colX.coerceIn(0, 15)][colZ.coerceIn(0, 15)]
+                return eh != Int.MIN_VALUE && y <= eh
+            }
+            val top = d.heights[colX][colZ]
+            if (top == Int.MIN_VALUE) return false
+            if (y > top) return false
+            if (y == top) return true
+            val stack = d.belowSurface[colX][colZ]
+            val idx = top - y - 1
+            return idx < stack.size // beyond scan depth → air (wall still renders)
         }
 
-        fun surfaceAt(x: Int, z: Int): Int {
-            // Columns of this chunk first; outside columns consult the already-
-            // loaded neighbour chunk heightmaps (cross-chunk cliff walls). If a
-            // neighbour isn't loaded yet, fall back to the edge column so no
-            // fake wall is invented — the neighbour triggers a rebuild when it
-            // arrives (see processChunkData).
-            val h = when {
-                x in 0..15 && z in 0..15 -> heights[x][z]
-                x < 0 -> neighborHeight(chunkX - 1, chunkZ, x + 16, z)
-                x > 15 -> neighborHeight(chunkX + 1, chunkZ, x - 16, z)
-                z < 0 -> neighborHeight(chunkX, chunkZ - 1, x, z + 16)
-                else -> neighborHeight(chunkX, chunkZ + 1, x, z - 16)
-            }
-            if (h != Int.MIN_VALUE) return h
-            val eh = heights[x.coerceIn(0, 15)][z.coerceIn(0, 15)]
-            return if (eh == Int.MIN_VALUE) Int.MIN_VALUE else eh
+        fun neighbourSolid(x: Int, z: Int, y: Int): Boolean = when {
+            x in 0..15 && z in 0..15 -> solidAt(chunkX, chunkZ, x, z, y)
+            x < 0 -> solidAt(chunkX - 1, chunkZ, x + 16, z, y)
+            x > 15 -> solidAt(chunkX + 1, chunkZ, x - 16, z, y)
+            z < 0 -> solidAt(chunkX, chunkZ - 1, x, z + 16, y)
+            else -> solidAt(chunkX, chunkZ + 1, x, z - 16, y)
         }
 
         fun blockAt(x: Int, z: Int, y: Int, top: Int): String {
@@ -438,16 +444,13 @@ class PlayerRenderer(
             for (z in 0 until 16) {
                 val top = heights[x][z]
                 if (top == Int.MIN_VALUE) continue
-                // Bottom of the visible column = min of the 4 neighbour surfaces.
-                var bottom = Int.MAX_VALUE
-                for ((nx, nz) in SURFACE_NEIGHBOURS) {
-                    val nh = surfaceAt(x + nx, z + nz)
-                    if (nh != Int.MIN_VALUE && nh < bottom) bottom = nh
-                }
-                if (bottom == Int.MAX_VALUE) bottom = top - 1
-                if (bottom > top - 1) bottom = top - 1 // at least the surface block
-
-                for (y in (bottom + 1)..top) {
+                // Walk down from the surface: emit faces where a neighbour column
+                // has NO solid block at this height (real exposure — caves,
+                // overhangs and cliffs all work). Stop once all four sides are
+                // buried (or we hit the 40-block scan depth).
+                val maxDepth = 40
+                var y = top
+                while (y >= top - maxDepth) {
                     val block = blockAt(x, z, y, top)
                     val bx = (baseX + x).toFloat()
                     val bz = (baseZ + z).toFloat()
@@ -476,22 +479,26 @@ class PlayerRenderer(
                         else -> null
                     }
                     val isGrassSide = block.substringAfter(':') in setOf("grass_block", "mycelium", "podzol")
-                    if (surfaceAt(x - 1, z) < y) {
+                    if (!neighbourSolid(x - 1, z, y)) {
                         val p = sideTexturePath(block); paths.add(p)
                         emitFace(bx, by, bz, WEST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
-                    if (surfaceAt(x + 1, z) < y) {
+                    if (!neighbourSolid(x + 1, z, y)) {
                         val p = sideTexturePath(block); paths.add(p)
                         emitFace(bx, by, bz, EAST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
-                    if (surfaceAt(x, z - 1) < y) {
+                    if (!neighbourSolid(x, z - 1, y)) {
                         val p = sideTexturePath(block); paths.add(p)
                         emitFace(bx, by, bz, NORTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
-                    if (surfaceAt(x, z + 1) < y) {
+                    if (!neighbourSolid(x, z + 1, y)) {
                         val p = sideTexturePath(block); paths.add(p)
                         emitFace(bx, by, bz, SOUTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
+                    // All four sides buried → nothing below can be visible.
+                    if (y != top && neighbourSolid(x - 1, z, y) && neighbourSolid(x + 1, z, y) &&
+                        neighbourSolid(x, z - 1, y) && neighbourSolid(x, z + 1, y)) break
+                    y--
                 }
             }
         }
@@ -562,7 +569,7 @@ class PlayerRenderer(
         try {
             for ((_, handles) in meshes) deleteHandles(handles)
             meshes.clear()
-            surfaceHeights.clear()
+            chunkDataCache.clear()
             pendingData.clear()
             atlas.deleteOnGl()
             if (shaderProgram != 0) GLES30.glDeleteProgram(shaderProgram)
@@ -620,7 +627,6 @@ class PlayerRenderer(
     )
 
     companion object {
-        private val SURFACE_NEIGHBOURS = arrayOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1)
 
         // Faces wound so the normal (cross product of the first triangle) points outward.
         private val TOP_FACE = Face(
