@@ -58,7 +58,8 @@ class MainActivity : ComponentActivity() {
     /** Global mouse detection (hover moves don't reach the activity, but
      *  wheel/button events do; the Player GL view listens for hovers). */
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (event.toolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+        // Source-based check is more portable than toolType across API levels.
+        if ((event.source and android.view.InputDevice.SOURCE_MOUSE) != 0) {
             MainActivity.lastMouseMoveMs = System.currentTimeMillis()
             return true
         }

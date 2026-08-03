@@ -312,10 +312,10 @@ fun PlayerModeScreen(
                 .focusRequester(focusRequester)
                 .onPreviewKeyEvent { e ->
                     // Keyboard movement: WASD + Space (jump) + Shift (dig down).
-                    if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown ||
-                        e.type == androidx.compose.ui.input.key.KeyEventType.KeyUp
-                    ) {
-                        val pressed = e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown
+                    // Read the native action/keyCode for maximum portability.
+                    val action = e.nativeKeyEvent.action
+                    if (action == android.view.KeyEvent.ACTION_DOWN || action == android.view.KeyEvent.ACTION_UP) {
+                        val pressed = action == android.view.KeyEvent.ACTION_DOWN
                         when (e.nativeKeyEvent.keyCode) {
                             android.view.KeyEvent.KEYCODE_W -> moveForward = pressed
                             android.view.KeyEvent.KEYCODE_S -> moveBack = pressed
