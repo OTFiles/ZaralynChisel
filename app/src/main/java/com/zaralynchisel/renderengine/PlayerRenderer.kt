@@ -498,11 +498,14 @@ class PlayerRenderer(
                 c[0] = floatArrayOf(x0, y0, z0); c[1] = floatArrayOf(x1, y0, z0)
                 c[2] = floatArrayOf(x1, y1, z0); c[3] = floatArrayOf(x0, y1, z0)
             }
-            // Wind so the first triangle's normal matches (nx,ny,nz).
+            // Wind the quad so BOTH triangles face (nx,ny,nz): if the first
+            // triangle is backwards, reverse the whole corner array (a plain
+            // c[1]/c[2] swap would flip the second triangle's winding and get
+            // culled — every face degenerated into a single triangle).
             val e1x = c[1][0]-c[0][0]; val e1y = c[1][1]-c[0][1]; val e1z = c[1][2]-c[0][2]
             val e2x = c[2][0]-c[0][0]; val e2y = c[2][1]-c[0][1]; val e2z = c[2][2]-c[0][2]
             val gx = e1y*e2z-e1z*e2y; val gy = e1z*e2x-e1x*e2z; val gz = e1x*e2y-e1y*e2x
-            if (gx*nx+gy*ny+gz*nz < 0) { val t = c[1]; c[1] = c[2]; c[2] = t }
+            if (gx*nx+gy*ny+gz*nz < 0) c.reverse()
             // UV axes: u along the horizontal in-plane axis, v vertical (or z on tops).
             val axA: Int; val axB: Int
             when {
@@ -593,7 +596,10 @@ class PlayerRenderer(
                 var y = top
                 while (y >= top - maxDepth) {
                     val info = blockAt(x, z, y, top)
-                    if (info == null) { y--; continue } // air / beyond scan
+                    // Air (real air entries recorded in the below-surface stack, or
+                    // beyond the scan) must not emit geometry — a non-null air
+                    // BlockInfo would otherwise render as a placeholder-textured cube.
+                    if (info == null || info.name.endsWith("air")) { y--; continue }
                     val block = info.name
                     val blockId = block.substringAfter(':')
                     val props = info.props
