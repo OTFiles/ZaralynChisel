@@ -36,7 +36,9 @@ object ChunkSurfaceReader {
         /** [x][z] → block names below the surface: index 0 = the block just below the
          *  surface, going down, up to [BELOW_SURFACE_SCAN_DEPTH] entries. Only solid
          *  blocks are recorded (scan stops at the first air). Empty if no surface. */
-        val belowSurface: Array<Array<Array<String?>>>
+        val belowSurface: Array<Array<Array<String?>>>,
+        /** [x][z] → biome id of the column ("minecraft:plains"), null if unknown. */
+        val biomes: Array<Array<String?>>
     )
 
     /** Cached palette lookup for one section (avoids re-parsing palette + data per call). */
@@ -67,6 +69,32 @@ object ChunkSurfaceReader {
         }
     }
 
+    /** Cached biome palette for one section (4×4×4 cells, packed like blocks). */
+    private class SectionBiomes(
+        val names: List<String>,
+        val bits: Int,
+        val data: LongArray?
+    ) {
+        fun biomeAt(x: Int, y: Int, z: Int): String? {
+            if (names.size == 1) return names[0]
+            val d = data ?: return names.firstOrNull()
+            val index = (y and 3) * 16 + (z and 3) * 4 + (x and 3)
+            val pi = readPackedLong(d, index, bits)
+            return names.getOrNull(pi)
+        }
+
+        companion object {
+            fun from(section: NbtReader.NbtTag.NbtCompound): SectionBiomes {
+                val biomes = section.getCompound("biomes")
+                val palette = biomes?.getList("palette")
+                val names = palette?.value?.mapNotNull { it as? String } ?: emptyList()
+                val data = biomes?.getLongArray("data")
+                val bits = maxOf(4, 32 - Integer.numberOfLeadingZeros(names.size - 1))
+                return SectionBiomes(names, bits, data)
+            }
+        }
+    }
+
     fun readSurface(
         chunkNbt: ByteArray,
         dimension: DimensionType = DimensionType.OVERWORLD
@@ -80,6 +108,14 @@ object ChunkSurfaceReader {
         val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
         val surfaceBlocks = Array(16) { arrayOfNulls<String>(16) }
         val belowSurface = Array(16) { Array(16) { arrayOfNulls<String>(0) } }
+        val biomes = Array(16) { arrayOfNulls<String>(16) }
+
+        // Per-section biome palette lookup (4×4×4 cells, same packed format as blocks).
+        val sectionBiomes = HashMap<Int, SectionBiomes>()
+        for (section in sectionList) {
+            val sy = section.getInt("Y")
+            sectionBiomes[sy] = SectionBiomes.from(section)
+        }
         val doLog = logCount < 3
         try {
             val reader = NbtReader(ByteArrayInputStream(chunkNbt))
@@ -159,6 +195,7 @@ object ChunkSurfaceReader {
                                 colors[x][z] = cid
                                 heights[x][z] = y
                                 surfaceBlocks[x][z] = name
+                                biomes[x][z] = sectionBiomes[y shr 4]?.biomeAt(x, y and 15, z)
                                 break
                             }
                         }
@@ -173,6 +210,7 @@ object ChunkSurfaceReader {
                                     colors[x][z] = cid
                                     heights[x][z] = section.getInt("Y") * 16 + y
                                     surfaceBlocks[x][z] = name
+                                    biomes[x][z] = sectionBiomes[section.getInt("Y")]?.biomeAt(x, y, z)
                                     found = true
                                     break
                                 }
@@ -211,7 +249,7 @@ object ChunkSurfaceReader {
         } catch (e: Exception) {
             Logger.e("Failed to read chunk surface", e)
         }
-        return SurfaceData(colors, heights, surfaceBlocks, belowSurface)
+        return SurfaceData(colors, heights, surfaceBlocks, belowSurface, biomes)
     }
 
     /**
@@ -222,7 +260,7 @@ object ChunkSurfaceReader {
         val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
         val surfaceBlocks = Array(16) { arrayOfNulls<String>(16) }
         val belowSurface = Array(16) { Array(16) { arrayOfNulls<String>(0) } }
-        if (heightsAbs == null) return SurfaceData(colors, heights, surfaceBlocks, belowSurface)
+        if (heightsAbs == null) return SurfaceData(colors, heights, surfaceBlocks, belowSurface, biomes)
         for (x in 0 until 16) {
             for (z in 0 until 16) {
                 val h = heightsAbs[z * 16 + x]
@@ -237,7 +275,7 @@ object ChunkSurfaceReader {
                 heights[x][z] = h
             }
         }
-        return SurfaceData(colors, heights, surfaceBlocks, belowSurface)
+        return SurfaceData(colors, heights, surfaceBlocks, belowSurface, biomes)
     }
 
     /**

@@ -229,14 +229,16 @@ class PlayerRenderer(
                 mesh.vertexBuffer, GLES30.GL_STATIC_DRAW
             )
 
-            // pos(3) + normal(3) + uv(2)
-            val stride = 8 * 4
+            // pos(3) + normal(3) + uv(2) + color(4 floats RGBA)
+            val stride = 48
             GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
             GLES30.glEnableVertexAttribArray(0)
             GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, stride, 3 * 4)
             GLES30.glEnableVertexAttribArray(1)
             GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, stride, 6 * 4)
             GLES30.glEnableVertexAttribArray(2)
+            GLES30.glVertexAttribPointer(3, 4, GLES30.GL_FLOAT, false, stride, 8 * 4)
+            GLES30.glEnableVertexAttribArray(3)
 
             GLES30.glBindVertexArray(0)
             meshes[key] = intArrayOf(vao[0], mesh.vertexCount, vbo[0])
@@ -375,6 +377,8 @@ class PlayerRenderer(
         val paths = LinkedHashSet<String>()
         val baseX = chunkX * 16
         val baseZ = chunkZ * 16
+        val WHITE = floatArrayOf(1f, 1f, 1f, 1f)
+        var grassTint: FloatArray = WHITE
 
         fun neighborHeight(nx: Int, nz: Int, colX: Int, colZ: Int): Int {
             val nh = surfaceHeights[chunkKey(nx, nz)] ?: return Int.MIN_VALUE
@@ -406,7 +410,8 @@ class PlayerRenderer(
             return stack.getOrNull(idx) ?: "minecraft:stone"
         }
 
-        fun emitFace(bx: Float, by: Float, bz: Float, face: Face, tile: Int) {
+        // color: null = white (no tint); 4 floats RGBA 0..1
+        fun emitFace(bx: Float, by: Float, bz: Float, face: Face, tile: Int, color: FloatArray? = null, sideGrass: Boolean = false) {
             val v = face.vertices
             val uv = atlas.uvOrigin(tile)
             val u0 = uv[0]
@@ -419,6 +424,13 @@ class PlayerRenderer(
                 verts.add(face.nx); verts.add(face.ny); verts.add(face.nz)
                 verts.add(u0 + (if (k == 1 || k == 2) 1f else 0f) * TextureAtlas.TILE_UV)
                 verts.add(v0 + (if (k == 2 || k == 3) 1f else 0f) * TextureAtlas.TILE_UV)
+                val c = when {
+                    // Grass-block side: only the top strip (v ≥ 0.75) is grass-coloured.
+                    sideGrass && (k == 2 || k == 3) -> grassTint
+                    color != null -> color
+                    else -> WHITE
+                }
+                verts.add(c[0]); verts.add(c[1]); verts.add(c[2]); verts.add(1f)
             }
         }
 
@@ -440,32 +452,55 @@ class PlayerRenderer(
                     val bx = (baseX + x).toFloat()
                     val bz = (baseZ + z).toFloat()
                     val by = y.toFloat()
+                    // Biome tinting: grass blocks take the biome grass colour, leaves
+                    // the foliage colour (vanilla behaviour).
+                    val biome = data.biomes[x][z]
+                    grassTint = grassTintOf(biome)
                     if (y == top) {
                         val p = topTexturePath(block)
                         paths.add(p)
-                        emitFace(bx, by, bz, TOP_FACE, atlas.tileFor(p))
+                        val tint = when (block.substringAfter(':')) {
+                            "grass_block", "mycelium", "podzol" -> grassTint
+                            "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
+                            "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "azalea_leaves",
+                            "flowering_azalea_leaves", "cherry_leaves" -> foliageTintOf(biome)
+                            else -> null
+                        }
+                        emitFace(bx, by, bz, TOP_FACE, atlas.tileFor(p), tint)
                     }
+                    val sideTint = when (block.substringAfter(':')) {
+                        "grass_block", "mycelium", "podzol" -> null // sideGrass handles the strip
+                        "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
+                        "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "azalea_leaves",
+                        "flowering_azalea_leaves", "cherry_leaves" -> foliageTintOf(biome)
+                        else -> null
+                    }
+                    val isGrassSide = block.substringAfter(':') in setOf("grass_block", "mycelium", "podzol")
                     if (surfaceAt(x - 1, z) < y) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, WEST_FACE, atlas.tileFor(p))
+                        emitFace(bx, by, bz, WEST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
                     if (surfaceAt(x + 1, z) < y) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, EAST_FACE, atlas.tileFor(p))
+                        emitFace(bx, by, bz, EAST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
                     if (surfaceAt(x, z - 1) < y) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, NORTH_FACE, atlas.tileFor(p))
+                        emitFace(bx, by, bz, NORTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
                     if (surfaceAt(x, z + 1) < y) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, SOUTH_FACE, atlas.tileFor(p))
+                        emitFace(bx, by, bz, SOUTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
                 }
             }
         }
-        return ChunkMesh(toFloatBuffer(verts), verts.size / 9, paths)
+        return ChunkMesh(toFloatBuffer(verts), verts.size / 12, paths)
     }
+
+    private fun grassTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgb(BiomeColors.grassColor(biome))
+
+    private fun foliageTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgb(BiomeColors.foliageColor(biome))
 
     private fun topTexturePath(block: String): String {
         val id = block.substringAfter(':')
@@ -608,13 +643,16 @@ class PlayerRenderer(
             layout(location = 0) in vec3 aPosition;
             layout(location = 1) in vec3 aNormal;
             layout(location = 2) in vec2 aUV;
+            layout(location = 3) in vec4 aColor;
             uniform mat4 uVP;
             out vec2 vUV;
             out vec3 vNormal;
+            out vec4 vColor;
             void main() {
                 gl_Position = uVP * vec4(aPosition, 1.0);
                 vUV = aUV;
                 vNormal = aNormal;
+                vColor = aColor;
             }
         """
 
@@ -624,6 +662,7 @@ class PlayerRenderer(
             uniform sampler2D uTex;
             in vec2 vUV;
             in vec3 vNormal;
+            in vec4 vColor;
             out vec4 fragColor;
             void main() {
                 vec4 tex = texture(uTex, vUV);
@@ -631,7 +670,7 @@ class PlayerRenderer(
                 vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                 float diff = max(dot(normal, lightDir), 0.0);
                 float light = 0.5 + 0.5 * diff;
-                fragColor = vec4(tex.rgb * light, 1.0);
+                fragColor = vec4(tex.rgb * vColor.rgb * light, 1.0);
             }
         """
     }
