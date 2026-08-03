@@ -134,8 +134,8 @@ fun PlayerModeScreen(
                 val sinYaw = kotlin.math.sin(radYaw).toFloat()
                 val cosYaw = kotlin.math.cos(radYaw).toFloat()
 
-                if (moveForward) { posX -= sinYaw * moveSpeed; posZ += cosYaw * moveSpeed }
-                if (moveBack) { posX += sinYaw * moveSpeed; posZ -= cosYaw * moveSpeed }
+                if (moveForward) { posX -= sinYaw * moveSpeed; posZ -= cosYaw * moveSpeed }
+                if (moveBack) { posX += sinYaw * moveSpeed; posZ += cosYaw * moveSpeed }
                 if (moveLeft) { posX -= cosYaw * moveSpeed; posZ -= sinYaw * moveSpeed }
                 if (moveRight) { posX += cosYaw * moveSpeed; posZ += sinYaw * moveSpeed }
             }

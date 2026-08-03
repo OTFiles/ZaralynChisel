@@ -100,8 +100,27 @@ fun LogViewerScreen(onBack: () -> Unit) {
         }
     }
 
-    // File content dialog
+    // File content dialog — paginated: shows the tail first, extends upward
+    // as the user scrolls (a multi-MB log must never render fully at once).
     if (showFileDialog && fileContent != null && selectedFile != null) {
+        val lines = remember(fileContent) { (fileContent ?: "").split("\n") }
+        var fileVisibleCount by remember(fileContent) { mutableIntStateOf(300) }
+        val fileVisible = remember(lines, fileVisibleCount) { lines.takeLast(fileVisibleCount) }
+        val fileListState = rememberLazyListState()
+
+        LaunchedEffect(showFileDialog, fileVisible.size) {
+            if (showFileDialog) fileListState.scrollToItem(0)
+        }
+        LaunchedEffect(fileListState, fileVisible.size) {
+            snapshotFlow { fileListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+                .distinctUntilChanged()
+                .collect { lastIndex ->
+                    if (lastIndex >= fileVisible.size - 2 && fileVisibleCount < lines.size) {
+                        fileVisibleCount = (fileVisibleCount + 300).coerceAtMost(lines.size)
+                    }
+                }
+        }
+
         AlertDialog(
             onDismissRequest = { showFileDialog = false },
             title = { Text(selectedFile!!.name) },
@@ -109,13 +128,26 @@ fun LogViewerScreen(onBack: () -> Unit) {
                 Box(
                     modifier = Modifier
                         .heightIn(max = 400.dp)
-                        .horizontalScroll(rememberScrollState())
+                        .fillMaxWidth()
                 ) {
-                    Text(
-                        text = fileContent ?: "",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp
-                    )
+                    LazyColumn(
+                        state = fileListState,
+                        modifier = Modifier.fillMaxSize(),
+                        reverseLayout = true,
+                        contentPadding = PaddingValues(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(1.dp)
+                    ) {
+                        items(fileVisible.size) { i ->
+                            val line = fileVisible[i]
+                            if (line.isNotBlank()) {
+                                Text(
+                                    text = line,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -136,12 +168,28 @@ fun LogViewerScreen(onBack: () -> Unit) {
 
 @Composable
 private fun InMemoryLogsView(logs: List<Logger.LogEntry>) {
+    // Show the newest entries first (reverse layout); loading the whole buffer at
+    // once made the viewer heavy. Start with a window near the tail and extend
+    // it when the user scrolls toward the older (top) entries.
+    var visibleCount by remember { mutableIntStateOf(200) }
+    val visible = remember(logs, visibleCount) { logs.takeLast(visibleCount) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) {
-            listState.animateScrollToItem(logs.size - 1)
+            listState.scrollToItem(0)
         }
+    }
+
+    // When the user scrolls to the very top (oldest visible entry), load more.
+    LaunchedEffect(listState, visible.size) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .distinctUntilChanged()
+            .collect { lastIndex ->
+                if (lastIndex >= visible.size - 2 && visibleCount < logs.size) {
+                    visibleCount = (visibleCount + 200).coerceAtMost(logs.size)
+                }
+            }
     }
 
     if (logs.isEmpty()) {
@@ -164,10 +212,11 @@ private fun InMemoryLogsView(logs: List<Logger.LogEntry>) {
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
+            reverseLayout = true,
             contentPadding = PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            items(logs, key = { it.seq }) { entry ->
+            items(visible, key = { it.seq }) { entry ->
                 LogEntryRow(entry)
             }
         }
