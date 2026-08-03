@@ -54,6 +54,16 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    /** Global mouse detection (hover moves don't reach the activity, but
+     *  wheel/button events do; the Player GL view listens for hovers). */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.toolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+            MainActivity.lastMouseMoveMs = System.currentTimeMillis()
+            return true
+        }
+        return super.onGenericMotionEvent(event)
+    }
 }
 
 object NavRoutes {
@@ -176,15 +186,5 @@ fun ZaralynChiselNavHost() {
         composable(NavRoutes.LOG_VIEWER) {
             LogViewerScreen(onBack = { navController.popBackStack() })
         }
-    }
-
-    /** Global mouse detection (hover moves don't reach the activity, but
-     *  wheel/button events do; the Player GL view listens for hovers). */
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (event.toolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
-            MainActivity.lastMouseMoveMs = System.currentTimeMillis()
-            return true
-        }
-        return super.onGenericMotionEvent(event)
     }
 }
