@@ -1,6 +1,7 @@
 package com.zaralynchisel.ui.playermode
 
 import android.opengl.GLSurfaceView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -12,7 +13,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +41,17 @@ fun PlayerModeScreen(
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
     val hasKeyboard = configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY
+
+    // Mouse/keyboard activity detection: recent mouse moves hide the touch UI.
+    var mouseActive by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            val t = System.currentTimeMillis() - com.zaralynchisel.ui.MainActivity.lastMouseMoveMs
+            mouseActive = t < 3000
+            delay(500L)
+        }
+    }
+    val hideTouchUi = hasKeyboard || mouseActive
 
     val app = context.applicationContext as com.zaralynchisel.ZaralynChiselApp
     val worldSelector = remember {
@@ -114,7 +128,9 @@ fun PlayerModeScreen(
         }
     }
 
-    // Continuous movement via WASD (held down = repeated move)
+    // Continuous movement via WASD keys, joystick (touch), or both. The
+    // movement vector is built from forward/strafe (-1..1) and applied along the
+    // camera basis so W always matches the view direction.
     var moveForward by remember { mutableStateOf(false) }
     var moveBack by remember { mutableStateOf(false) }
     var moveLeft by remember { mutableStateOf(false) }
@@ -122,22 +138,31 @@ fun PlayerModeScreen(
     var moveUp by remember { mutableStateOf(false) }
     var moveDown by remember { mutableStateOf(false) }
 
+    // Virtual joystick state (left half of the screen).
+    var joyActive by remember { mutableStateOf(false) }
+    var joyOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    var joyVec by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    var joyPointerId by remember { mutableIntStateOf(-1) }
+    private val joyMaxRadius = 64f
+
     // Continuous movement coroutine. With collision enabled the player is glued
     // to the terrain: moving uphill raises them, walking off a cliff makes them
     // fall, ↑ jumps and ↓ digs down (release ↓ to pop back to the surface).
     // Without collision it's free flight (keys ±Y directly, no gravity).
-    LaunchedEffect(moveForward, moveBack, moveLeft, moveRight, moveUp, moveDown) {
-        val moveSpeed = 0.3f
+    LaunchedEffect(Unit) {
         while (isActive) {
-            if (moveForward || moveBack || moveLeft || moveRight) {
+            val moveSpeed = 0.3f
+            // Forward/strafe from joystick (up = forward) merged with keys.
+            val jx = if (joyActive) (joyVec.x / joyMaxRadius).coerceIn(-1f, 1f) else 0f
+            val jy = if (joyActive) (joyVec.y / joyMaxRadius).coerceIn(-1f, 1f) else 0f
+            val fwd = (if (moveForward) 1f else 0f) - (if (moveBack) 1f else 0f) - jy
+            val strafe = (if (moveRight) 1f else 0f) - (if (moveLeft) 1f else 0f) + jx
+            if (fwd != 0f || strafe != 0f) {
                 val radYaw = Math.toRadians(yaw.toDouble())
                 val sinYaw = kotlin.math.sin(radYaw).toFloat()
                 val cosYaw = kotlin.math.cos(radYaw).toFloat()
-
-                if (moveForward) { posX -= sinYaw * moveSpeed; posZ -= cosYaw * moveSpeed }
-                if (moveBack) { posX += sinYaw * moveSpeed; posZ += cosYaw * moveSpeed }
-                if (moveLeft) { posX -= cosYaw * moveSpeed; posZ -= sinYaw * moveSpeed }
-                if (moveRight) { posX += cosYaw * moveSpeed; posZ += sinYaw * moveSpeed }
+                posX += (-sinYaw * fwd + cosYaw * strafe) * moveSpeed
+                posZ += (-cosYaw * fwd - sinYaw * strafe) * moveSpeed
             }
             if (collisionEnabled) {
                 val ground = rendererRef?.groundHeightAt(posX, posZ)
@@ -278,7 +303,34 @@ fun PlayerModeScreen(
             }
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+        LaunchedEffect(Unit) { focusRequester.requestFocus() }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .focusRequester(focusRequester)
+                .onPreviewKeyEvent { e ->
+                    // Keyboard movement: WASD + Space (jump) + Shift (dig down).
+                    if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown ||
+                        e.type == androidx.compose.ui.input.key.KeyEventType.KeyUp
+                    ) {
+                        val pressed = e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown
+                        when (e.nativeKeyEvent.keyCode) {
+                            android.view.KeyEvent.KEYCODE_W -> moveForward = pressed
+                            android.view.KeyEvent.KEYCODE_S -> moveBack = pressed
+                            android.view.KeyEvent.KEYCODE_A -> moveLeft = pressed
+                            android.view.KeyEvent.KEYCODE_D -> moveRight = pressed
+                            android.view.KeyEvent.KEYCODE_SPACE -> moveUp = pressed
+                            android.view.KeyEvent.KEYCODE_SHIFT_LEFT,
+                            android.view.KeyEvent.KEYCODE_SHIFT_RIGHT -> moveDown = pressed
+                            else -> return@onPreviewKeyEvent false
+                        }
+                        return@onPreviewKeyEvent true
+                    }
+                    false
+                }
+        ) {
             // Keep a reference so the GL context can be torn down when leaving.
             var glViewRef by remember { mutableStateOf<GLSurfaceView?>(null) }
 
@@ -345,6 +397,13 @@ fun PlayerModeScreen(
                                     lastX = event.x
                                     lastY = event.y
                                     isMultiTouch = false
+                                    // Left half = joystick, right half = look.
+                                    if (event.x < this.width / 2f) {
+                                        joyActive = true
+                                        joyPointerId = event.getPointerId(0)
+                                        joyOrigin = androidx.compose.ui.geometry.Offset(event.x, event.y)
+                                        joyVec = androidx.compose.ui.geometry.Offset.Zero
+                                    }
                                     true
                                 }
                                 android.view.MotionEvent.ACTION_POINTER_DOWN -> {
@@ -352,7 +411,16 @@ fun PlayerModeScreen(
                                     true
                                 }
                                 android.view.MotionEvent.ACTION_MOVE -> {
-                                    if (!isMultiTouch && event.pointerCount == 1) {
+                                    if (joyActive && event.pointerId == joyPointerId) {
+                                        var vx = event.x - joyOrigin.x
+                                        var vy = event.y - joyOrigin.y
+                                        val len = kotlin.math.sqrt(vx * vx + vy * vy)
+                                        if (len > joyMaxRadius) {
+                                            vx = vx / len * joyMaxRadius
+                                            vy = vy / len * joyMaxRadius
+                                        }
+                                        joyVec = androidx.compose.ui.geometry.Offset(vx, vy)
+                                    } else if (!isMultiTouch && event.pointerCount == 1) {
                                         val dx = event.x - lastX
                                         val dy = event.y - lastY
                                         yaw = (yaw + dx * 0.15f) % 360f
@@ -361,6 +429,40 @@ fun PlayerModeScreen(
                                         lastX = event.x
                                         lastY = event.y
                                     }
+                                    true
+                                }
+                                android.view.MotionEvent.ACTION_UP,
+                                android.view.MotionEvent.ACTION_CANCEL -> {
+                                    if (event.getPointerId(event.actionIndex) == joyPointerId) {
+                                        joyActive = false
+                                        joyVec = androidx.compose.ui.geometry.Offset.Zero
+                                        joyPointerId = -1
+                                    }
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                        // Mouse look: hover moves rotate the view; also feeds the
+                        // mouse-activity flag that hides the touch UI.
+                        var mouseX = 0f
+                        var mouseY = 0f
+                        setOnHoverListener { _, event ->
+                            when (event.action) {
+                                android.view.MotionEvent.ACTION_HOVER_ENTER -> {
+                                    mouseX = event.x
+                                    mouseY = event.y
+                                    true
+                                }
+                                android.view.MotionEvent.ACTION_HOVER_MOVE -> {
+                                    val dx = event.x - mouseX
+                                    val dy = event.y - mouseY
+                                    mouseX = event.x
+                                    mouseY = event.y
+                                    yaw = (yaw + dx * 0.3f) % 360f
+                                    pitch = (pitch - dy * 0.3f).coerceIn(-89f, 89f)
+                                    renderer.updateCamera(posX, posY, posZ, yaw, pitch)
+                                    com.zaralynchisel.ui.MainActivity.lastMouseMoveMs = System.currentTimeMillis()
                                     true
                                 }
                                 else -> false
@@ -378,24 +480,23 @@ fun PlayerModeScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // ── WASD Touch Controls ──────────────────────────────────
-            if (showWASD) {
-                // Left side — D-Pad (WASD)
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(start = 24.dp, bottom = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    // W / Forward
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        WasdButton("W", pressed = moveForward) { moveForward = it }
-                    }
-                    // A S D
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        WasdButton("A", pressed = moveLeft) { moveLeft = it }
-                        WasdButton("S", pressed = moveBack) { moveBack = it }
-                        WasdButton("D", pressed = moveRight) { moveRight = it }
+            // ── Touch Controls (hidden when a keyboard/mouse is active) ──
+            if (showWASD && !hideTouchUi) {
+                // Virtual joystick — drawn where the player put their thumb.
+                if (joyActive) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val ox = joyOrigin.x
+                        val oy = joyOrigin.y
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.25f),
+                            radius = 52.dp.toPx(),
+                            center = androidx.compose.ui.geometry.Offset(ox, oy)
+                        )
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.45f),
+                            radius = 20.dp.toPx(),
+                            center = androidx.compose.ui.geometry.Offset(ox + joyVec.x, oy + joyVec.y)
+                        )
                     }
                 }
 
@@ -406,8 +507,8 @@ fun PlayerModeScreen(
                         .padding(end = 24.dp, bottom = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    WasdButton("↑", pressed = moveUp, size = 44.dp) { moveUp = it }
-                    WasdButton("↓", pressed = moveDown, size = 44.dp) { moveDown = it }
+                    WasdButton("↑", pressed = moveUp, size = 52.dp) { moveUp = it }
+                    WasdButton("↓", pressed = moveDown, size = 52.dp) { moveDown = it }
                 }
             }
 

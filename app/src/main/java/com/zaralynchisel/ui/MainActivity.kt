@@ -4,6 +4,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -32,10 +33,16 @@ import com.zaralynchisel.ui.playermode.PlayerModeScreen
 import com.zaralynchisel.ui.settings.SettingsScreen
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        /** Last time (System.currentTimeMillis) a mouse move/scroll was seen;
+         *  0 = no mouse activity yet. Written by onGenericMotionEvent. */
+        @Volatile
+        var lastMouseMoveMs = 0L
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
+        enableEdgeToEdge()        setContent {
             ZaralynChiselTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -168,5 +175,16 @@ fun ZaralynChiselNavHost() {
         composable(NavRoutes.LOG_VIEWER) {
             LogViewerScreen(onBack = { navController.popBackStack() })
         }
+    }
+
+    /** Global mouse detection (see docs: hover moves don't reach the activity,
+     *  but wheel/button events do). The Player mode also listens for hover moves
+     *  on its GL view; this catches the rest so the touch UI hides reliably. */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.toolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+            companion.lastMouseMoveMs = System.currentTimeMillis()
+            return true
+        }
+        return super.onGenericMotionEvent(event)
     }
 }
