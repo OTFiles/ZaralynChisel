@@ -143,7 +143,7 @@ fun PlayerModeScreen(
     var joyOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     var joyVec by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     var joyPointerId by remember { mutableIntStateOf(-1) }
-    private val joyMaxRadius = 64f
+    val joyMaxRadius = 64f
 
     // Continuous movement coroutine. With collision enabled the player is glued
     // to the terrain: moving uphill raises them, walking off a cliff makes them
@@ -411,7 +411,7 @@ fun PlayerModeScreen(
                                     true
                                 }
                                 android.view.MotionEvent.ACTION_MOVE -> {
-                                    if (joyActive && event.pointerId == joyPointerId) {
+                                    if (joyActive && event.getPointerId(event.actionIndex) == joyPointerId) {
                                         var vx = event.x - joyOrigin.x
                                         var vy = event.y - joyOrigin.y
                                         val len = kotlin.math.sqrt(vx * vx + vy * vy)
