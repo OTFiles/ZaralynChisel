@@ -94,8 +94,32 @@ object BiomeColors {
         "minecraft:basalt_deltas" to 0xAEAA2A
     )
 
+    private val WATER = mapOf(
+        "minecraft:ocean" to 0x1787D4, "minecraft:deep_ocean" to 0x1787D4,
+        "minecraft:lukewarm_ocean" to 0x1787D4, "minecraft:deep_lukewarm_ocean" to 0x1787D4,
+        "minecraft:cold_ocean" to 0x2570B5, "minecraft:deep_cold_ocean" to 0x2570B5,
+        "minecraft:frozen_ocean" to 0x2570B5, "minecraft:deep_frozen_ocean" to 0x2570B5,
+        "minecraft:warm_ocean" to 0x43D5EE,
+        "minecraft:river" to 0x1787D4, "minecraft:frozen_river" to 0x2570B5,
+        "minecraft:swamp" to 0x617B64, "minecraft:mangrove_swamp" to 0x617B64,
+        "minecraft:badlands" to 0xA9B09C, "minecraft:wooded_badlands" to 0xA9B09C,
+        "minecraft:eroded_badlands" to 0xA9B09C,
+        "minecraft:savanna" to 0xA9B09C, "minecraft:savanna_plateau" to 0xA9B09C,
+        "minecraft:windswept_savanna" to 0xA9B09C,
+        "minecraft:desert" to 0x32A598,
+        "minecraft:jungle" to 0x14A085, "minecraft:bamboo_jungle" to 0x14A085,
+        "minecraft:sparse_jungle" to 0x14A085,
+        "minecraft:beach" to 0x157CBD, "minecraft:snowy_beach" to 0x2570B5,
+        "minecraft:stony_shore" to 0x007BF7,
+        "minecraft:mushroom_fields" to 0x8A8997,
+        "minecraft:the_end" to 0x3F76E4, "minecraft:end_barrens" to 0x3F76E4,
+        "minecraft:end_highlands" to 0x3F76E4, "minecraft:end_midlands" to 0x3F76E4,
+        "minecraft:small_end_islands" to 0x3F76E4
+    )
+
     private const val DEFAULT_GRASS = 0x91BD59
     private const val DEFAULT_FOLIAGE = 0x77AB2F
+    private const val DEFAULT_WATER = 0x3F76E4
 
     /** Grass tint (0xRRGGBB) for a biome id; plains color for unknown biomes. */
     fun grassColor(biome: String?): Int {
@@ -107,6 +131,12 @@ object BiomeColors {
     fun foliageColor(biome: String?): Int {
         biome ?: return DEFAULT_FOLIAGE
         return FOLIAGE[biome] ?: DEFAULT_FOLIAGE
+    }
+
+    /** Water tint (0xRRGGBB) for a biome id; plains blue for unknown biomes. */
+    fun waterColor(biome: String?): Int {
+        biome ?: return DEFAULT_WATER
+        return WATER[biome] ?: DEFAULT_WATER
     }
 
     /** Split 0xRRGGBB into float RGB (0..1). */

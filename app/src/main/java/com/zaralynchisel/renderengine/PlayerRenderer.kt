@@ -422,17 +422,28 @@ class PlayerRenderer(
             val uv = atlas.uvOrigin(tile)
             val u0 = uv[0]
             val v0 = uv[1]
-            // Each face emits 6 vertices (two triangles) so glDrawArrays(GL_TRIANGLES)
-            // never stitches across faces. Emitting only 4 made every 2nd triangle
-            // span two faces — the visible "triangle" artifacts.
+            // UV axes follow the face's own axes so side textures are never
+            // rotated: u runs horizontally (along x for Z faces, along z for X
+            // faces), v runs vertically (y) for sides, and x/z for the top.
+            // (The old k-index mapping put u along y on EAST/WEST faces — a 90°
+            // rotation of the texture.)
+            val isXFace = face.nx != 0f
+            val isYFace = face.ny != 0f
             for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
-                verts.add(bx + v[k * 3]); verts.add(by + v[k * 3 + 1]); verts.add(bz + v[k * 3 + 2])
+                val px = v[k * 3]; val py = v[k * 3 + 1]; val pz = v[k * 3 + 2]
+                val u = when {
+                    isYFace -> px
+                    isXFace -> pz
+                    else -> px
+                }
+                val t = if (isYFace) pz else py
+                verts.add(bx + px); verts.add(by + py); verts.add(bz + pz)
                 verts.add(face.nx); verts.add(face.ny); verts.add(face.nz)
-                verts.add(u0 + (if (k == 1 || k == 2) 1f else 0f) * TextureAtlas.TILE_UV)
-                verts.add(v0 + (if (k == 2 || k == 3) 1f else 0f) * TextureAtlas.TILE_UV)
+                verts.add(u0 + u * TextureAtlas.TILE_UV)
+                verts.add(v0 + t * TextureAtlas.TILE_UV)
                 val c = when {
-                    // Grass-block side: only the top strip (v ≥ 0.75) is grass-coloured.
-                    sideGrass && (k == 2 || k == 3) -> grassTint
+                    // Grass-block side: only the top strip (t ≥ 0.75) is grass-coloured.
+                    sideGrass && t >= 0.75f -> grassTint
                     color != null -> color
                     else -> WHITE
                 }
@@ -455,45 +466,64 @@ class PlayerRenderer(
                     val bx = (baseX + x).toFloat()
                     val bz = (baseZ + z).toFloat()
                     val by = y.toFloat()
-                    // Biome tinting: grass blocks take the biome grass colour, leaves
-                    // the foliage colour (vanilla behaviour).
+                    val blockId = block.substringAfter(':')
                     val biome = data.biomes[x][z]
                     grassTint = grassTintOf(biome)
+
+                    // Cross-model plants (crops, flowers, sugar cane, grass…):
+                    // two X-shaped double-sided quads instead of a cube.
+                    if (blockId in CROSS_BLOCKS) {
+                        val p = "minecraft:block/$blockId"
+                        paths.add(p)
+                        val tile = atlas.tileFor(p)
+                        val tint = crossTintOf(blockId, biome)
+                        emitCross(bx, by, bz, tile, tint)
+                        y--
+                        continue
+                    }
+
+                    val isWater = blockId == "water"
+                    val waterTint = if (isWater) BiomeColors.toFloatRgb(BiomeColors.waterColor(biome)) else null
+                    // Water surface sits 1/8 below the block top (vanilla look).
+                    val waterDrop = if (isWater && y == top) 0.125f else 0f
+                    val wby = by - waterDrop
+                    // Biome tinting: grass blocks take the biome grass colour, leaves
+                    // the foliage colour (vanilla behaviour).
                     if (y == top) {
                         val p = topTexturePath(block)
                         paths.add(p)
-                        val tint = when (block.substringAfter(':')) {
+                        val tint = when (blockId) {
                             "grass_block", "mycelium", "podzol" -> grassTint
                             "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
                             "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "azalea_leaves",
                             "flowering_azalea_leaves", "cherry_leaves" -> foliageTintOf(biome)
-                            else -> null
+                            else -> waterTint
                         }
-                        emitFace(bx, by, bz, TOP_FACE, atlas.tileFor(p), tint)
+                        emitFace(bx, wby, bz, TOP_FACE, atlas.tileFor(p), tint)
                     }
-                    val sideTint = when (block.substringAfter(':')) {
+                    val sideTint = when (blockId) {
                         "grass_block", "mycelium", "podzol" -> null // sideGrass handles the strip
                         "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
                         "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "azalea_leaves",
                         "flowering_azalea_leaves", "cherry_leaves" -> foliageTintOf(biome)
-                        else -> null
+                        else -> waterTint
                     }
-                    val isGrassSide = block.substringAfter(':') in setOf("grass_block", "mycelium", "podzol")
+                    val isGrassSide = blockId in setOf("grass_block", "mycelium", "podzol")
                     if (!neighbourSolid(x - 1, z, y)) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, WEST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
+                        emitFace(bx, wby, bz, WEST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
                     if (!neighbourSolid(x + 1, z, y)) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, EAST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
+                        emitFace(bx, wby, bz, EAST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
                     if (!neighbourSolid(x, z - 1, y)) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, NORTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
+                        emitFace(bx, wby, bz, NORTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
                     if (!neighbourSolid(x, z + 1, y)) {
                         val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, by, bz, SOUTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
+                        emitFace(bx, wby, bz, SOUTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
                     }
                     // All four sides buried → nothing below can be visible.
                     if (y != top && neighbourSolid(x - 1, z, y) && neighbourSolid(x + 1, z, y) &&
@@ -508,6 +538,41 @@ class PlayerRenderer(
     private fun grassTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgb(BiomeColors.grassColor(biome))
 
     private fun foliageTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgb(BiomeColors.foliageColor(biome))
+
+    /** Emit both cross faces twice (front + back winding) so plants show from any angle. */
+    private fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?) {
+        val uv = atlas.uvOrigin(tile)
+        val u0 = uv[0]
+        val v0 = uv[1]
+        val faces = arrayOf(CROSS_1, CROSS_2)
+        for (face in faces) {
+            for (back in 0..1) {
+                val v = face.vertices
+                for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
+                    val i = if (back == 0) k else 3 - k
+                    val px = v[i * 3]; val py = v[i * 3 + 1]; val pz = v[i * 3 + 2]
+                    verts.add(bx + px); verts.add(by + py); verts.add(bz + pz)
+                    val n = if (back == 0) 1f else -1f
+                    verts.add(face.nx * n); verts.add(face.ny * n); verts.add(face.nz * n)
+                    verts.add(u0 + px * TextureAtlas.TILE_UV)
+                    verts.add(v0 + pz * TextureAtlas.TILE_UV)
+                    val c = tint ?: floatArrayOf(1f, 1f, 1f, 1f)
+                    verts.add(c[0]); verts.add(c[1]); verts.add(c[2]); verts.add(1f)
+                }
+            }
+        }
+    }
+
+    /** Blocks rendered as double-sided X-shaped quads (vanilla cross model). */
+    /** Tint for cross plants: foliage colour for leaves-ish plants, grass colour
+     *  for grass/ferns, white for flowers/saplings/torches (vanilla). */
+    private fun crossTintOf(id: String, biome: String?): FloatArray? = when (id) {
+        "short_grass", "tall_grass", "fern", "large_fern", "vine", "lily_pad",
+        "sugar_cane", "wheat", "carrots", "potatoes", "beetroots", "sweet_berry_bush",
+        "crimson_roots", "warped_roots", "nether_sprouts" -> grassTintOf(biome)
+        "sunflower", "lilac", "rose_bush", "peony", "tall_grass" -> foliageTintOf(biome)
+        else -> null
+    }
 
     private fun topTexturePath(block: String): String {
         val id = block.substringAfter(':')
@@ -627,6 +692,19 @@ class PlayerRenderer(
     )
 
     companion object {
+        /** Blocks rendered as double-sided X-shaped quads (vanilla cross model). */
+        private val CROSS_BLOCKS = setOf(
+            "short_grass", "tall_grass", "fern", "large_fern", "vine", "lily_pad",
+            "sugar_cane", "bamboo", "wheat", "carrots", "potatoes", "beetroots",
+            "poppy", "dandelion", "blue_orchid", "allium", "azure_bluet",
+            "red_tulip", "orange_tulip", "white_tulip", "pink_tulip", "oxeye_daisy",
+            "cornflower", "lily_of_the_valley", "wither_rose", "sunflower", "lilac",
+            "rose_bush", "peony", "dead_bush", "sweet_berry_bush", "torch", "soul_torch",
+            "oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling",
+            "acacia_sapling", "dark_oak_sapling", "cherry_sapling", "mangrove_propagule",
+            "brown_mushroom", "red_mushroom", "crimson_fungus", "warped_fungus",
+            "crimson_roots", "warped_roots", "nether_sprouts"
+        )
 
         // Faces wound so the normal (cross product of the first triangle) points outward.
         private val TOP_FACE = Face(
@@ -641,6 +719,13 @@ class PlayerRenderer(
             floatArrayOf(0f,0f,1f, 1f,0f,1f, 1f,1f,1f, 0f,1f,1f), 0f, 0f, 1f)
         private val NORTH_FACE = Face(
             floatArrayOf(1f,0f,0f, 0f,0f,0f, 0f,1f,0f, 1f,1f,0f), 0f, 0f, -1f)
+
+        // Cross-plant faces (X shape, like vanilla crops/flowers). Normals point
+        // diagonally; faces are emitted twice (back side) so they show from both sides.
+        private val CROSS_1 = Face(
+            floatArrayOf(0f,0f,0f, 1f,0f,1f, 1f,1f,1f, 0f,1f,0f), -0.7071f, 0f, 0.7071f)
+        private val CROSS_2 = Face(
+            floatArrayOf(1f,0f,0f, 0f,0f,1f, 0f,1f,1f, 1f,1f,0f), -0.7071f, 0f, -0.7071f)
 
         // Terrain shader: textured blocks, lit by a fixed world-space directional
         // light. Pixels stay crisp: NEAREST filtering + mipmaps (atlas side).

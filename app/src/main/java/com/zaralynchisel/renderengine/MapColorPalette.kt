@@ -91,6 +91,18 @@ object MapColorPalette {
         return when {
             name == "air" || name == "cave_air" || name == "void_air" || name == "barrier" || name == "light" -> 0
             name == "grass_block" || name == "short_grass" || name == "tall_grass" || name == "fern" || name == "large_fern" || name == "vine" || name == "lily_pad" || name == "sugar_cane" || name == "bamboo" -> 1
+            // Crops, flowers, saplings, torches and other cross-model plants.
+            name == "wheat" || name == "carrots" || name == "potatoes" || name == "beetroots" ||
+                name.endsWith("_sapling") || name == "torch" || name == "soul_torch" || name == "dead_bush" ||
+                name == "poppy" || name == "dandelion" || name == "blue_orchid" || name == "allium" ||
+                name == "azure_bluet" || name == "red_tulip" || name == "orange_tulip" ||
+                name == "white_tulip" || name == "pink_tulip" || name == "oxeye_daisy" ||
+                name == "cornflower" || name == "lily_of_the_valley" || name == "wither_rose" ||
+                name == "sunflower" || name == "lilac" || name == "rose_bush" || name == "peony" ||
+                name == "sweet_berry_bush" || name.endsWith("_mushroom") -> 1
+            // Doors and trapdoors (wood = brown-ish, iron = grey).
+            name.endsWith("_door") || name.endsWith("_trapdoor") ->
+                if (name == "iron_door" || name == "iron_trapdoor") 6 else 13
             name.contains("leaves") || name == "azalea" || name == "flowering_azalea" || name == "mangrove_roots" || name == "moss_block" || name == "moss_carpet" -> 7
             name == "sand" || name == "red_sand" || name == "suspicious_sand" -> 2
             name.startsWith("sandstone") -> 2
@@ -129,6 +141,7 @@ object MapColorPalette {
             }
             name == "water" || name == "bubble_column" -> 12
             name == "ice" || name == "packed_ice" || name == "blue_ice" || name == "frosted_ice" -> 5
+            name.contains("glass") || name == "glowstone" || name == "sea_lantern" -> 5
             name == "snow" || name == "snow_block" || name == "powder_snow" || name == "white_wool" -> 8
             name == "quartz_block" || name.startsWith("quartz_") || name == "smooth_quartz" -> 14
             name == "clay" -> 9
