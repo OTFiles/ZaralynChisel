@@ -3,7 +3,7 @@ package com.zaralynchisel.renderengine
 /**
  * Biome tint colors for grass blocks and leaves, matching vanilla 1.21
  * biome definitions (effects.grass_color / effects.foliage_color in
- * data/minecraft/worldgen/biome/*.json).
+ * data/minecraft/worldgen/biome/ 的 json 定义).
  *
  * Unknown biomes (modded) fall back to plains colors.
  */

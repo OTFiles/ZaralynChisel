@@ -109,13 +109,6 @@ object ChunkSurfaceReader {
         val surfaceBlocks = Array(16) { arrayOfNulls<String>(16) }
         val belowSurface = Array(16) { Array(16) { arrayOfNulls<String>(0) } }
         val biomes = Array(16) { arrayOfNulls<String>(16) }
-
-        // Per-section biome palette lookup (4×4×4 cells, same packed format as blocks).
-        val sectionBiomes = HashMap<Int, SectionBiomes>()
-        for (section in sectionList) {
-            val sy = section.getInt("Y")
-            sectionBiomes[sy] = SectionBiomes.from(section)
-        }
         val doLog = logCount < 3
         try {
             val reader = NbtReader(ByteArrayInputStream(chunkNbt))
@@ -168,6 +161,11 @@ object ChunkSurfaceReader {
             val sectionByY = HashMap<Int, SectionBlocks>()
             for (s in sectionList) {
                 sectionByY[s.getInt("Y")] = SectionBlocks.from(s)
+            }
+            // Per-section biome palette lookup (4×4×4 cells, same packed format as blocks).
+            val sectionBiomes = HashMap<Int, SectionBiomes>()
+            for (s in sectionList) {
+                sectionBiomes[s.getInt("Y")] = SectionBiomes.from(s)
             }
             val sectionsDesc = sectionList.sortedByDescending { it.getInt("Y") }
 
