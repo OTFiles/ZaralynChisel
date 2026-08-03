@@ -384,6 +384,28 @@ class PlayerRenderer(
         /** Is the column (colX, colZ) of chunk (nx, nz) solid at height y?
          *  Columns beyond the 40-block stack depth count as AIR so exposed cliff
          *  walls keep rendering; the per-column loop never goes deeper than that. */
+        fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?) {
+            val uv = atlas.uvOrigin(tile)
+            val u0 = uv[0]
+            val v0 = uv[1]
+            for (face in arrayOf(CROSS_1, CROSS_2)) {
+                for (back in 0..1) {
+                    val v = face.vertices
+                    for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
+                        val i = if (back == 0) k else 3 - k
+                        val px = v[i * 3]; val py = v[i * 3 + 1]; val pz = v[i * 3 + 2]
+                        verts.add(bx + px); verts.add(by + py); verts.add(bz + pz)
+                        val n = if (back == 0) 1f else -1f
+                        verts.add(face.nx * n); verts.add(face.ny * n); verts.add(face.nz * n)
+                        verts.add(u0 + px * TextureAtlas.TILE_UV)
+                        verts.add(v0 + pz * TextureAtlas.TILE_UV)
+                        val c = tint ?: floatArrayOf(1f, 1f, 1f, 1f)
+                        verts.add(c[0]); verts.add(c[1]); verts.add(c[2]); verts.add(1f)
+                    }
+                }
+            }
+        }
+
         fun solidAt(nx: Int, nz: Int, colX: Int, colZ: Int, y: Int): Boolean {
             val d = if (nx == chunkX && nz == chunkZ) data else chunkDataCache[chunkKey(nx, nz)]
             if (d == null) {
@@ -538,30 +560,6 @@ class PlayerRenderer(
     private fun grassTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgb(BiomeColors.grassColor(biome))
 
     private fun foliageTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgb(BiomeColors.foliageColor(biome))
-
-    /** Emit both cross faces twice (front + back winding) so plants show from any angle. */
-    private fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?) {
-        val uv = atlas.uvOrigin(tile)
-        val u0 = uv[0]
-        val v0 = uv[1]
-        val faces = arrayOf(CROSS_1, CROSS_2)
-        for (face in faces) {
-            for (back in 0..1) {
-                val v = face.vertices
-                for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
-                    val i = if (back == 0) k else 3 - k
-                    val px = v[i * 3]; val py = v[i * 3 + 1]; val pz = v[i * 3 + 2]
-                    verts.add(bx + px); verts.add(by + py); verts.add(bz + pz)
-                    val n = if (back == 0) 1f else -1f
-                    verts.add(face.nx * n); verts.add(face.ny * n); verts.add(face.nz * n)
-                    verts.add(u0 + px * TextureAtlas.TILE_UV)
-                    verts.add(v0 + pz * TextureAtlas.TILE_UV)
-                    val c = tint ?: floatArrayOf(1f, 1f, 1f, 1f)
-                    verts.add(c[0]); verts.add(c[1]); verts.add(c[2]); verts.add(1f)
-                }
-            }
-        }
-    }
 
     /** Blocks rendered as double-sided X-shaped quads (vanilla cross model). */
     /** Tint for cross plants: foliage colour for leaves-ish plants, grass colour
