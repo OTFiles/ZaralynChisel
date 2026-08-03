@@ -258,6 +258,7 @@ object ChunkSurfaceReader {
         val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
         val surfaceBlocks = Array(16) { arrayOfNulls<String>(16) }
         val belowSurface = Array(16) { Array(16) { arrayOfNulls<String>(0) } }
+        val biomes = Array(16) { arrayOfNulls<String>(16) }
         if (heightsAbs == null) return SurfaceData(colors, heights, surfaceBlocks, belowSurface, biomes)
         for (x in 0 until 16) {
             for (z in 0 until 16) {

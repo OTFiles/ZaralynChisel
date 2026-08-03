@@ -176,16 +176,15 @@ fun ZaralynChiselNavHost() {
         composable(NavRoutes.LOG_VIEWER) {
             LogViewerScreen(onBack = { navController.popBackStack() })
         }
-    }
 
-    /** Global mouse detection (see docs: hover moves don't reach the activity,
-     *  but wheel/button events do). The Player mode also listens for hover moves
-     *  on its GL view; this catches the rest so the touch UI hides reliably. */
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (event.toolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
-            companion.lastMouseMoveMs = System.currentTimeMillis()
-            return true
+        /** Global mouse detection (hover moves don't reach the activity, but
+         *  wheel/button events do; the Player GL view listens for hovers). */
+        override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+            if (event.toolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+                MainActivity.lastMouseMoveMs = System.currentTimeMillis()
+                return true
+            }
+            return super.onGenericMotionEvent(event)
         }
-        return super.onGenericMotionEvent(event)
     }
 }
