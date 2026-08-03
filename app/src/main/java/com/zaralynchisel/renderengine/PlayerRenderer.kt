@@ -58,15 +58,27 @@ class PlayerRenderer(
     private val chunkDataCache = java.util.concurrent.ConcurrentHashMap<Long, ChunkSurfaceReader.SurfaceData>()
 
     /** Surface height (absolute Y) of the column containing (x,z), or null when
-     *  that chunk hasn't loaded (or has no surface). Thread-safe. */
+     *  that chunk hasn't loaded (or has no surface). Cross plants at the top are
+     *  skipped so the player stands on the real ground. Thread-safe. */
     fun groundHeightAt(x: Float, z: Float): Float? {
         val cx = kotlin.math.floor(x / 16f).toInt()
         val cz = kotlin.math.floor(z / 16f).toInt()
         val data = chunkDataCache[chunkKey(cx, cz)] ?: return null
         val colX = Math.floorMod(kotlin.math.floor(x).toInt(), 16)
         val colZ = Math.floorMod(kotlin.math.floor(z).toInt(), 16)
-        val h = data.heights[colX][colZ]
-        return if (h == Int.MIN_VALUE) null else h.toFloat()
+        var y = data.heights[colX][colZ]
+        if (y == Int.MIN_VALUE) return null
+        // Walk down past plants and air until the first real ground block.
+        while (true) {
+            val top = data.heights[colX][colZ]
+            val info = if (y == top) data.surfaceBlocks[colX][colZ]
+                       else data.belowSurface[colX][colZ].getOrNull(top - y - 1)
+            val id = info?.name?.substringAfter(':') ?: break
+            if (!id.endsWith("air") && id !in CROSS_BLOCKS) return y.toFloat()
+            y--
+            if (y < top - 60) break
+        }
+        return y.toFloat()
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
@@ -193,16 +205,35 @@ class PlayerRenderer(
             GLES30.glUniform1i(GLES30.glGetUniformLocation(shaderProgram, "uTex"), 0)
 
             for ((key, handles) in meshes) {
-                drawMesh(key, handles)
+                drawMesh(key, handles, translucent = false)
             }
+            // Translucent pass: alpha blend, no depth write, far chunks first so
+            // nearer water/glass/plants blend correctly over farther ones.
+            GLES30.glEnable(GLES30.GL_BLEND)
+            GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+            GLES30.glDepthMask(false)
+            val camX = viewConfig.cameraX
+            val camZ = viewConfig.cameraZ
+            val trans = meshes.entries
+                .filter { it.value.size >= 6 && it.value[4] > 0 }
+                .sortedByDescending { entry ->
+                    val cx = (entry.key shr 32).toInt() * 16 + 8 - camX
+                    val cz = (entry.key.toInt()) * 16 + 8 - camZ
+                    cx * cx + cz * cz
+                }
+            for ((key, handles) in trans) {
+                drawMesh(key, handles, translucent = true)
+            }
+            GLES30.glDepthMask(true)
+            GLES30.glDisable(GLES30.GL_BLEND)
         } catch (e: Exception) {
             Logger.e("PlayerRenderer.onDrawFrame failed", e)
         }
     }
 
-    private fun drawMesh(key: Long, handles: IntArray) {
-        val vao = handles[0]
-        val vertexCount = handles[1]
+    private fun drawMesh(key: Long, handles: IntArray, translucent: Boolean) {
+        val vao = if (translucent) handles[3] else handles[0]
+        val vertexCount = if (translucent) handles[4] else handles[1]
         if (vertexCount == 0) return
         GLES30.glBindVertexArray(vao)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, vertexCount)
@@ -221,29 +252,48 @@ class PlayerRenderer(
             val vbo = IntArray(1)
             GLES30.glGenVertexArrays(1, vao, 0)
             GLES30.glGenBuffers(1, vbo, 0)
-
+            uploadBuffer(vbo[0], mesh.vertexBuffer)
             GLES30.glBindVertexArray(vao[0])
-
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[0])
-            GLES30.glBufferData(
-                GLES30.GL_ARRAY_BUFFER, mesh.vertexBuffer.capacity() * 4,
-                mesh.vertexBuffer, GLES30.GL_STATIC_DRAW
-            )
-
-            // pos(3) + normal(3) + uv(2) + color(4 floats RGBA)
-            val stride = 48
-            GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
-            GLES30.glEnableVertexAttribArray(0)
-            GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, stride, 3 * 4)
-            GLES30.glEnableVertexAttribArray(1)
-            GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, stride, 6 * 4)
-            GLES30.glEnableVertexAttribArray(2)
-            GLES30.glVertexAttribPointer(3, 4, GLES30.GL_FLOAT, false, stride, 8 * 4)
-            GLES30.glEnableVertexAttribArray(3)
-
+            setupAttribs()
             GLES30.glBindVertexArray(0)
-            meshes[key] = intArrayOf(vao[0], mesh.vertexCount, vbo[0])
+
+            // Translucent geometry (if any) gets its own VAO/VBO.
+            var tvao = 0
+            var tvbo = 0
+            var tcount = 0
+            val tbuf = mesh.transBuffer
+            if (tbuf != null && mesh.transCount > 0) {
+                tvao = IntArray(1).also { GLES30.glGenVertexArrays(1, it, 0) }[0]
+                tvbo = IntArray(1).also { GLES30.glGenBuffers(1, it, 0) }[0]
+                uploadBuffer(tvbo, tbuf)
+                GLES30.glBindVertexArray(tvao)
+                setupAttribs()
+                GLES30.glBindVertexArray(0)
+                tcount = mesh.transCount
+            }
+            meshes[key] = intArrayOf(vao[0], mesh.vertexCount, vbo[0], tvao, tcount, tvbo)
         }
+    }
+
+    private fun uploadBuffer(vbo: Int, buf: FloatBuffer) {
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo)
+        GLES30.glBufferData(
+            GLES30.GL_ARRAY_BUFFER, buf.capacity() * 4,
+            buf, GLES30.GL_STATIC_DRAW
+        )
+    }
+
+    /** pos(3) + normal(3) + uv(2) + color(4 floats RGBA), stride 48. */
+    private fun setupAttribs() {
+        val stride = 48
+        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
+        GLES30.glEnableVertexAttribArray(0)
+        GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, stride, 3 * 4)
+        GLES30.glEnableVertexAttribArray(1)
+        GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, stride, 6 * 4)
+        GLES30.glEnableVertexAttribArray(2)
+        GLES30.glVertexAttribPointer(3, 4, GLES30.GL_FLOAT, false, stride, 8 * 4)
+        GLES30.glEnableVertexAttribArray(3)
     }
 
     /** Enqueue loads for chunks within render distance; drop far chunks. */
@@ -280,10 +330,16 @@ class PlayerRenderer(
 
     private fun deleteHandles(handles: IntArray) {
         try {
+            if (handles.size >= 6 && handles[5] != 0) {
+                GLES30.glDeleteBuffers(1, intArrayOf(handles[5]), 0) // translucent vbo
+            }
             if (handles.size >= 3) {
                 GLES30.glDeleteBuffers(1, intArrayOf(handles[2]), 0) // vbo
             }
             GLES30.glDeleteVertexArrays(1, intArrayOf(handles[0]), 0)
+            if (handles.size >= 4 && handles[3] != 0) {
+                GLES30.glDeleteVertexArrays(1, intArrayOf(handles[3]), 0)
+            }
         } catch (_: Exception) { }
     }
 
@@ -375,37 +431,17 @@ class PlayerRenderer(
     ): ChunkMesh {
         val heights = data.heights
         val verts = ArrayList<Float>(2048)
+        val transVerts = ArrayList<Float>(256)
         val paths = LinkedHashSet<String>()
         val baseX = chunkX * 16
         val baseZ = chunkZ * 16
-        val WHITE = floatArrayOf(1f, 1f, 1f, 1f)
+        val WHITE = floatArrayOf(1f, 1f, 1f, 1f, 1f)
         var grassTint: FloatArray = WHITE
 
         /** Is the column (colX, colZ) of chunk (nx, nz) solid at height y?
-         *  Columns beyond the 40-block stack depth count as AIR so exposed cliff
-         *  walls keep rendering; the per-column loop never goes deeper than that. */
-        fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?) {
-            val uv = atlas.uvOrigin(tile)
-            val u0 = uv[0]
-            val v0 = uv[1]
-            for (face in arrayOf(CROSS_1, CROSS_2)) {
-                for (back in 0..1) {
-                    val v = face.vertices
-                    for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
-                        val i = if (back == 0) k else 3 - k
-                        val px = v[i * 3]; val py = v[i * 3 + 1]; val pz = v[i * 3 + 2]
-                        verts.add(bx + px); verts.add(by + py); verts.add(bz + pz)
-                        val n = if (back == 0) 1f else -1f
-                        verts.add(face.nx * n); verts.add(face.ny * n); verts.add(face.nz * n)
-                        verts.add(u0 + px * TextureAtlas.TILE_UV)
-                        verts.add(v0 + pz * TextureAtlas.TILE_UV)
-                        val c = tint ?: floatArrayOf(1f, 1f, 1f, 1f)
-                        verts.add(c[0]); verts.add(c[1]); verts.add(c[2]); verts.add(1f)
-                    }
-                }
-            }
-        }
-
+         *  Beyond the 40-block stack depth, or missing neighbor data, counts as
+         *  AIR so exposed cliff walls keep rendering; cross-model plants are not
+         *  solid (they're thin and must not occlude cubes behind them). */
         fun solidAt(nx: Int, nz: Int, colX: Int, colZ: Int, y: Int): Boolean {
             val d = if (nx == chunkX && nz == chunkZ) data else chunkDataCache[chunkKey(nx, nz)]
             if (d == null) {
@@ -415,12 +451,14 @@ class PlayerRenderer(
                 return eh != Int.MIN_VALUE && y <= eh
             }
             val top = d.heights[colX][colZ]
-            if (top == Int.MIN_VALUE) return false
-            if (y > top) return false
-            if (y == top) return true
-            val stack = d.belowSurface[colX][colZ]
-            val idx = top - y - 1
-            return idx < stack.size // beyond scan depth → air (wall still renders)
+            if (top == Int.MIN_VALUE || y > top) return false
+            val info = if (y == top) d.surfaceBlocks[colX][colZ]
+                       else d.belowSurface[colX][colZ].getOrNull(top - y - 1)
+            if (info == null) return false
+            val id = info.name.substringAfter(':')
+            if (id.endsWith("air")) return false
+            if (id in CROSS_BLOCKS) return false
+            return true
         }
 
         fun neighbourSolid(x: Int, z: Int, y: Int): Boolean = when {
@@ -431,45 +469,113 @@ class PlayerRenderer(
             else -> solidAt(chunkX, chunkZ + 1, x, z - 16, y)
         }
 
-        fun blockAt(x: Int, z: Int, y: Int, top: Int): String {
-            if (y == top) return data.surfaceBlocks[x][z] ?: "minecraft:stone"
+        /** Block info at (x, z) of this chunk at height y; null = air (or beyond scan). */
+        fun blockAt(x: Int, z: Int, y: Int, top: Int): ChunkSurfaceReader.BlockInfo? {
+            if (y == top) return data.surfaceBlocks[x][z]
             val stack = data.belowSurface[x][z]
-            val idx = top - y - 1
-            return stack.getOrNull(idx) ?: "minecraft:stone"
+            return stack.getOrNull(top - y - 1)
         }
 
-        // color: null = white (no tint); 4 floats RGBA 0..1
-        fun emitFace(bx: Float, by: Float, bz: Float, face: Face, tile: Int, color: FloatArray? = null, sideGrass: Boolean = false) {
-            val v = face.vertices
+        /** Emit one rectangle (axis-aligned, on the X/Y/Z plane through the block at
+         *  (bx,by,bz)) into the opaque or translucent vertex list. UVs span the rect. */
+        fun emitRect(
+            bx: Float, by: Float, bz: Float,
+            nx: Float, ny: Float, nz: Float,
+            x0: Float, y0: Float, z0: Float,
+            x1: Float, y1: Float, z1: Float,
+            tile: Int, color: FloatArray?, alpha: Float,
+            sideGrassStrip: Boolean = false,
+            trans: Boolean = false
+        ) {
+            val c = arrayOf(
+                floatArrayOf(x0, y0, z0), floatArrayOf(x1, y0, z0),
+                floatArrayOf(x1, y0, z1), floatArrayOf(x0, y0, z1)
+            )
+            if (nx != 0f) { // x-plane: corners at x0, z spans y0..y1
+                c[0] = floatArrayOf(x0, y0, z0); c[1] = floatArrayOf(x0, y0, z1)
+                c[2] = floatArrayOf(x0, y1, z1); c[3] = floatArrayOf(x0, y1, z0)
+            } else if (nz != 0f) { // z-plane
+                c[0] = floatArrayOf(x0, y0, z0); c[1] = floatArrayOf(x1, y0, z0)
+                c[2] = floatArrayOf(x1, y1, z0); c[3] = floatArrayOf(x0, y1, z0)
+            }
+            // Wind so the first triangle's normal matches (nx,ny,nz).
+            val e1x = c[1][0]-c[0][0]; val e1y = c[1][1]-c[0][1]; val e1z = c[1][2]-c[0][2]
+            val e2x = c[2][0]-c[0][0]; val e2y = c[2][1]-c[0][1]; val e2z = c[2][2]-c[0][2]
+            val gx = e1y*e2z-e1z*e2y; val gy = e1z*e2x-e1x*e2z; val gz = e1x*e2y-e1y*e2x
+            if (gx*nx+gy*ny+gz*nz < 0) { val t = c[1]; c[1] = c[2]; c[2] = t }
+            // UV axes: u along the horizontal in-plane axis, v vertical (or z on tops).
+            val axA: Int; val axB: Int
+            when {
+                ny != 0f -> { axA = 0; axB = 2 }
+                nx != 0f -> { axA = 2; axB = 1 }
+                else -> { axA = 0; axB = 1 }
+            }
+            var minA = Float.MAX_VALUE; var maxA = -Float.MAX_VALUE
+            var minB = Float.MAX_VALUE; var maxB = -Float.MAX_VALUE
+            for (p in c) {
+                if (p[axA] < minA) minA = p[axA]; if (p[axA] > maxA) maxA = p[axA]
+                if (p[axB] < minB) minB = p[axB]; if (p[axB] > maxB) maxB = p[axB]
+            }
             val uv = atlas.uvOrigin(tile)
-            val u0 = uv[0]
-            val v0 = uv[1]
-            // UV axes follow the face's own axes so side textures are never
-            // rotated: u runs horizontally (along x for Z faces, along z for X
-            // faces), v runs vertically (y) for sides, and x/z for the top.
-            // (The old k-index mapping put u along y on EAST/WEST faces — a 90°
-            // rotation of the texture.)
-            val isXFace = face.nx != 0f
-            val isYFace = face.ny != 0f
+            val u0 = uv[0]; val v0 = uv[1]
+            val target = if (trans) transVerts else verts
+            val a = alpha
             for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
-                val px = v[k * 3]; val py = v[k * 3 + 1]; val pz = v[k * 3 + 2]
-                val u = when {
-                    isYFace -> px
-                    isXFace -> pz
-                    else -> px
-                }
-                val t = if (isYFace) pz else py
-                verts.add(bx + px); verts.add(by + py); verts.add(bz + pz)
-                verts.add(face.nx); verts.add(face.ny); verts.add(face.nz)
-                verts.add(u0 + u * TextureAtlas.TILE_UV)
-                verts.add(v0 + t * TextureAtlas.TILE_UV)
-                val c = when {
-                    // Grass-block side: only the top strip (t ≥ 0.75) is grass-coloured.
-                    sideGrass && t >= 0.75f -> grassTint
+                val p = c[k]
+                val u = if (maxA > minA) (p[axA]-minA)/(maxA-minA) else 0f
+                val t = if (maxB > minB) (p[axB]-minB)/(maxB-minB) else 0f
+                target.add(bx+p[0]); target.add(by+p[1]); target.add(bz+p[2])
+                target.add(nx); target.add(ny); target.add(nz)
+                target.add(u0 + u*TextureAtlas.TILE_UV); target.add(v0 + t*TextureAtlas.TILE_UV)
+                val cc = when {
+                    // Grass-block side: only the top strip (t >= 0.75) is grass-coloured.
+                    sideGrassStrip && ny == 0f && t >= 0.75f -> grassTint
                     color != null -> color
                     else -> WHITE
                 }
-                verts.add(c[0]); verts.add(c[1]); verts.add(c[2]); verts.add(1f)
+                target.add(cc[0]); target.add(cc[1]); target.add(cc[2]); target.add(a)
+            }
+        }
+
+        /** Emit an axis-aligned box with per-face enable flags. All coords block-local 0..1. */
+        fun emitBox(
+            bx: Float, by: Float, bz: Float,
+            x0: Float, y0: Float, z0: Float,
+            x1: Float, y1: Float, z1: Float,
+            tile: Int, color: FloatArray?, alpha: Float,
+            top: Boolean, bottom: Boolean,
+            north: Boolean, south: Boolean, east: Boolean, west: Boolean,
+            sideGrass: Boolean = false,
+            trans: Boolean = false,
+            topTile: Int = tile
+        ) {
+            if (top) emitRect(bx,by,bz, 0f,1f,0f, x0,y1,z0, x1,y1,z1, topTile, color, alpha, trans = trans)
+            if (bottom) emitRect(bx,by,bz, 0f,-1f,0f, x0,y0,z0, x1,y0,z1, tile, color, alpha, trans = trans)
+            if (north) emitRect(bx,by,bz, 0f,0f,-1f, x0,y0,z0, x1,y1,z0, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans)
+            if (south) emitRect(bx,by,bz, 0f,0f,1f, x0,y0,z1, x1,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans)
+            if (west) emitRect(bx,by,bz, -1f,0f,0f, x0,y0,z0, x0,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans)
+            if (east) emitRect(bx,by,bz, 1f,0f,0f, x1,y0,z0, x1,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans)
+        }
+
+        /** Cross-model plants: two X-shaped double-sided quads (vanilla cross model). */
+        fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?) {
+            val uv = atlas.uvOrigin(tile)
+            val u0 = uv[0]; val v0 = uv[1]
+            for (face in arrayOf(CROSS_1, CROSS_2)) {
+                for (back in 0..1) {
+                    val v = face.vertices
+                    for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
+                        val i = if (back == 0) k else 3 - k
+                        val px = v[i*3]; val py = v[i*3+1]; val pz = v[i*3+2]
+                        transVerts.add(bx+px); transVerts.add(by+py); transVerts.add(bz+pz)
+                        val n = if (back == 0) 1f else -1f
+                        transVerts.add(face.nx*n); transVerts.add(face.ny*n); transVerts.add(face.nz*n)
+                        transVerts.add(u0 + px*TextureAtlas.TILE_UV); transVerts.add(v0 + pz*TextureAtlas.TILE_UV)
+                        val c = tint ?: WHITE
+                        val a = c.getOrElse(3) { 1f }
+                        transVerts.add(c[0]); transVerts.add(c[1]); transVerts.add(c[2]); transVerts.add(a)
+                    }
+                }
             }
         }
 
@@ -477,6 +583,8 @@ class PlayerRenderer(
             for (z in 0 until 16) {
                 val top = heights[x][z]
                 if (top == Int.MIN_VALUE) continue
+                val biome = data.biomes[x][z]
+                grassTint = grassTintOf(biome)
                 // Walk down from the surface: emit faces where a neighbour column
                 // has NO solid block at this height (real exposure — caves,
                 // overhangs and cliffs all work). Stop once all four sides are
@@ -484,82 +592,233 @@ class PlayerRenderer(
                 val maxDepth = 40
                 var y = top
                 while (y >= top - maxDepth) {
-                    val block = blockAt(x, z, y, top)
+                    val info = blockAt(x, z, y, top)
+                    if (info == null) { y--; continue } // air / beyond scan
+                    val block = info.name
+                    val blockId = block.substringAfter(':')
+                    val props = info.props
                     val bx = (baseX + x).toFloat()
                     val bz = (baseZ + z).toFloat()
                     val by = y.toFloat()
-                    val blockId = block.substringAfter(':')
-                    val biome = data.biomes[x][z]
-                    grassTint = grassTintOf(biome)
+                    val solidAbove = neighbourSolid(x, z, y + 1)
 
-                    // Cross-model plants (crops, flowers, sugar cane, grass…):
-                    // two X-shaped double-sided quads instead of a cube.
+                    // Cross-model plants render as X quads (translucent pass — their
+                    // textures have real alpha that would otherwise turn black).
                     if (blockId in CROSS_BLOCKS) {
                         val p = "minecraft:block/$blockId"
                         paths.add(p)
-                        val tile = atlas.tileFor(p)
-                        val tint = crossTintOf(blockId, biome)
-                        emitCross(bx, by, bz, tile, tint)
+                        emitCross(bx, by, bz, atlas.tileFor(p), crossTintOf(blockId, biome))
                         y--
                         continue
                     }
 
                     val isWater = blockId == "water"
-                    val waterTint = if (isWater) BiomeColors.toFloatRgb(BiomeColors.waterColor(biome)) else null
+                    val waterTint = if (isWater) BiomeColors.toFloatRgba(BiomeColors.waterColor(biome), WATER_ALPHA) else null
                     // Water surface sits 1/8 below the block top (vanilla look).
                     val waterDrop = if (isWater && y == top) 0.125f else 0f
                     val wby = by - waterDrop
-                    // Biome tinting: grass blocks take the biome grass colour, leaves
-                    // the foliage colour (vanilla behaviour).
-                    if (y == top) {
-                        val p = topTexturePath(block)
-                        paths.add(p)
-                        val tint = when (blockId) {
-                            "grass_block", "mycelium", "podzol" -> grassTint
-                            "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
-                            "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "azalea_leaves",
-                            "flowering_azalea_leaves", "cherry_leaves" -> foliageTintOf(biome)
-                            else -> waterTint
-                        }
-                        emitFace(bx, wby, bz, TOP_FACE, atlas.tileFor(p), tint)
-                    }
+                    val isGrassSide = blockId in setOf("grass_block", "mycelium", "podzol")
                     val sideTint = when (blockId) {
-                        "grass_block", "mycelium", "podzol" -> null // sideGrass handles the strip
+                        "grass_block", "mycelium", "podzol" -> null // strip tint below
                         "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
                         "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "azalea_leaves",
                         "flowering_azalea_leaves", "cherry_leaves" -> foliageTintOf(biome)
                         else -> waterTint
                     }
-                    val isGrassSide = blockId in setOf("grass_block", "mycelium", "podzol")
-                    if (!neighbourSolid(x - 1, z, y)) {
-                        val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, wby, bz, WEST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
+                    val topTint = when (blockId) {
+                        "grass_block", "mycelium", "podzol" -> grassTint
+                        "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
+                        "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "azalea_leaves",
+                        "flowering_azalea_leaves", "cherry_leaves" -> foliageTintOf(biome)
+                        else -> waterTint
                     }
-                    if (!neighbourSolid(x + 1, z, y)) {
-                        val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, wby, bz, EAST_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
+
+                    val sideP = when {
+                        isWater -> "minecraft:block/water_still"
+                        blockId == "grass_block" -> "minecraft:block/grass_block_side"
+                        blockId == "mycelium" -> "minecraft:block/mycelium_side"
+                        blockId == "podzol" -> "minecraft:block/podzol_side"
+                        blockId == "dirt_path" -> "minecraft:block/dirt_path_side"
+                        else -> "minecraft:block/$blockId"
                     }
-                    if (!neighbourSolid(x, z - 1, y)) {
-                        val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, wby, bz, NORTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
+                    val topP = when {
+                        isWater -> sideP
+                        blockId == "grass_block" -> "minecraft:block/grass_block_top"
+                        blockId == "mycelium" -> "minecraft:block/mycelium_top"
+                        blockId == "podzol" -> "minecraft:block/podzol_top"
+                        blockId == "dirt_path" -> "minecraft:block/dirt_path_top"
+                        else -> sideP
                     }
-                    if (!neighbourSolid(x, z + 1, y)) {
-                        val p = sideTexturePath(block); paths.add(p)
-                        emitFace(bx, wby, bz, SOUTH_FACE, atlas.tileFor(p), sideTint, sideGrass = isGrassSide)
+                    paths.add(sideP); paths.add(topP)
+                    val tile = atlas.tileFor(sideP)
+                    val topTile = atlas.tileFor(topP)
+                    val alpha = when {
+                        isWater -> WATER_ALPHA
+                        blockId.endsWith("_door") || blockId.endsWith("_trapdoor") -> DOOR_ALPHA
+                        else -> 1f
+                    }
+                    val trans = isWater || blockId.endsWith("_door") || blockId.endsWith("_trapdoor")
+
+                    when {
+                        blockId.endsWith("_slab") -> {
+                            val type = props["type"] ?: "bottom"
+                            if (type == "double") {
+                                emitBox(bx, wby, bz, 0f,0f,0f, 1f,1f,1f, tile, topTint, alpha, topTile = topTile,
+                                    top = !solidAbove, bottom = false,
+                                    north = !neighbourSolid(x, z-1, y), south = !neighbourSolid(x, z+1, y),
+                                    west = !neighbourSolid(x-1, z, y), east = !neighbourSolid(x+1, z, y),
+                                    sideGrass = isGrassSide, trans = trans)
+                            } else {
+                                val y0 = if (type == "bottom") 0f else 0.5f
+                                emitBox(bx, wby, bz, 0f,y0,0f, 1f,y0+0.5f,1f, tile, topTint, alpha, topTile = topTile,
+                                    top = !solidAbove, bottom = false,
+                                    north = !neighbourSolid(x, z-1, y), south = !neighbourSolid(x, z+1, y),
+                                    west = !neighbourSolid(x-1, z, y), east = !neighbourSolid(x+1, z, y),
+                                    sideGrass = isGrassSide, trans = trans)
+                            }
+                        }
+                        blockId.endsWith("_stairs") -> {
+                            // Vanilla stairs = full bottom half + back half on top
+                            // (back = away from the facing direction).
+                            val facing = props["facing"] ?: "north"
+                            // back = filled half (away from facing); front = step top.
+                            val (bx0, bz0, bx1, bz1) = when (facing) {
+                                "north" -> floatArrayOf(0f, 0.5f, 1f, 1f)   // south half
+                                "south" -> floatArrayOf(0f, 0f, 1f, 0.5f)   // north half
+                                "west" -> floatArrayOf(0.5f, 0f, 1f, 1f)    // east half
+                                else -> floatArrayOf(0f, 0f, 0.5f, 1f)       // west half
+                            }
+                            val (fx0, fz0, fx1, fz1) = when (facing) {
+                                "north" -> floatArrayOf(0f, 0f, 1f, 0.5f)
+                                "south" -> floatArrayOf(0f, 0.5f, 1f, 1f)
+                                "west" -> floatArrayOf(0f, 0f, 0.5f, 1f)
+                                else -> floatArrayOf(0.5f, 0f, 1f, 1f)
+                            }
+                            val sN = !neighbourSolid(x, z-1, y); val sS = !neighbourSolid(x, z+1, y)
+                            val sW = !neighbourSolid(x-1, z, y); val sE = !neighbourSolid(x+1, z, y)
+                            // Bottom box: full footprint, y..y+0.5.
+                            emitBox(bx, by, bz, 0f,0f,0f, 1f,0.5f,1f, tile, topTint, alpha, topTile = topTile,
+                                top = false, bottom = false,
+                                north = sN, south = sS, west = sW, east = sE,
+                                sideGrass = isGrassSide, trans = trans)
+                            // Step top (front half at y+0.5) — exposed where the top box is absent.
+                            emitRect(bx, by, bz, 0f,1f,0f, fx0,0.5f,fz0, fx1,0.5f,fz1, topTile, topTint, alpha, trans = trans)
+                            // Top box: back half, y+0.5..y+1.
+                            emitBox(bx, by, bz, bx0,0.5f,bz0, bx1,1f,bz1, tile, topTint, alpha, topTile = topTile,
+                                top = !solidAbove, bottom = true,
+                                north = sN, south = sS, west = sW, east = sE,
+                                sideGrass = isGrassSide, trans = trans)
+                        }
+                        blockId.endsWith("_door") -> {
+                            // 3px panel (0.1875); half from block-state properties.
+                            val facing = props["facing"] ?: "north"
+                            val open = props["open"] == "true"
+                            val hinge = props["hinge"] ?: "right"
+                            val t = 0.1875f
+                            val (dx, dz) = when (facing) {
+                                "south" -> 0f to 1f; "east" -> 1f to 0f; "west" -> -1f to 0f
+                                else -> 0f to -1f
+                            }
+                            // When open the leaf lies against the wall on the hinge side.
+                            var lx = dz; var lz = -dx
+                            if (hinge != "left") { lx = -lx; lz = -lz }
+                            val px0: Float; val pz0: Float
+                            val px1: Float; val pz1: Float
+                            if (open) {
+                                px0 = if (lx > 0) 1f - t else 0f; px1 = if (lx > 0) 1f else t
+                                pz0 = if (lz > 0) 1f - t else 0f; pz1 = if (lz > 0) 1f else t
+                            } else {
+                                px0 = if (dx > 0) 1f - t else 0f; px1 = if (dx > 0) 1f else t
+                                pz0 = if (dz > 0) 1f - t else 0f; pz1 = if (dz > 0) 1f else t
+                            }
+                            val doorTile = atlas.tileFor(if (props["half"] == "upper") "minecraft:block/${blockId}_top" else "minecraft:block/${blockId}_bottom")
+                            paths.add("minecraft:block/${blockId}_top"); paths.add("minecraft:block/${blockId}_bottom")
+                            val sN = !neighbourSolid(x, z-1, y); val sS = !neighbourSolid(x, z+1, y)
+                            val sW = !neighbourSolid(x-1, z, y); val sE = !neighbourSolid(x+1, z, y)
+                            emitBox(bx, by, bz, px0,0f,pz0, px1,1f,pz1, doorTile, null, alpha, topTile = topTile,
+                                top = !solidAbove, bottom = false,
+                                north = sN, south = sS, west = sW, east = sE, trans = trans)
+                        }
+                        blockId.endsWith("_trapdoor") -> {
+                            val half = props["half"] ?: "bottom"
+                            val open = props["open"] == "true"
+                            val facing = props["facing"] ?: "north"
+                            val t = 0.1875f
+                            val sN = !neighbourSolid(x, z-1, y); val sS = !neighbourSolid(x, z+1, y)
+                            val sW = !neighbourSolid(x-1, z, y); val sE = !neighbourSolid(x+1, z, y)
+                            if (open) {
+                                // Vertical panel at the facing edge (like a closed door).
+                                val (dx, dz) = when (facing) {
+                                    "south" -> 0f to 1f; "east" -> 1f to 0f; "west" -> -1f to 0f
+                                    else -> 0f to -1f
+                                }
+                                val px0 = if (dx > 0) 1f - t else 0f; val px1 = if (dx > 0) 1f else t
+                                val pz0 = if (dz > 0) 1f - t else 0f; val pz1 = if (dz > 0) 1f else t
+                                emitBox(bx, by, bz, px0,0f,pz0, px1,1f,pz1, tile, topTint, alpha, topTile = topTile,
+                                    top = !solidAbove, bottom = false,
+                                    north = sN, south = sS, west = sW, east = sE, trans = trans)
+                            } else {
+                                val y0 = if (half == "bottom") 0f else 1f - t
+                                emitBox(bx, by, bz, 0f,y0,0f, 1f,y0+t,1f, tile, topTint, alpha, topTile = topTile,
+                                    top = !solidAbove, bottom = false,
+                                    north = sN, south = sS, west = sW, east = sE, trans = trans)
+                            }
+                        }
+                        blockId.endsWith("_pane") || blockId.contains("glass") || blockId == "iron_bars" -> {
+                            if (blockId.endsWith("_pane") || blockId == "iron_bars") {
+                                // 2px panel(s); connections come from block-state props.
+                                val t = 0.125f
+                                val sN = !neighbourSolid(x, z-1, y); val sS = !neighbourSolid(x, z+1, y)
+                                val sW = !neighbourSolid(x-1, z, y); val sE = !neighbourSolid(x+1, z, y)
+                                val e = props["east"] == "true"; val w = props["west"] == "true"
+                                val n = props["north"] == "true"; val so = props["south"] == "true"
+                                if (e || w || (!n && !so)) {
+                                    emitBox(bx, by, bz, 0.4375f,0f,0f, 0.5625f,1f,1f, tile, topTint, 1f, topTile = topTile,
+                                        top = !solidAbove, bottom = false,
+                                        north = sN, south = sS, west = sW, east = sE, trans = true)
+                                }
+                                if (n || so) {
+                                    emitBox(bx, by, bz, 0f,0f,0.4375f, 1f,1f,0.5625f, tile, topTint, 1f, topTile = topTile,
+                                        top = !solidAbove, bottom = false,
+                                        north = sN, south = sS, west = sW, east = sE, trans = true)
+                                }
+                            } else {
+                                // Full glass cube (cutout look via texture alpha).
+                                emitBox(bx, by, bz, 0f,0f,0f, 1f,1f,1f, tile, topTint, 1f,
+                                    top = !solidAbove, bottom = false,
+                                    north = !neighbourSolid(x, z-1, y), south = !neighbourSolid(x, z+1, y),
+                                    west = !neighbourSolid(x-1, z, y), east = !neighbourSolid(x+1, z, y),
+                                    sideGrass = isGrassSide, trans = true)
+                            }
+                        }
+                        else -> {
+                            // Full cube.
+                            emitBox(bx, wby, bz, 0f,0f,0f, 1f,1f,1f, tile, topTint, alpha, topTile = topTile,
+                                top = !solidAbove, bottom = false,
+                                north = !neighbourSolid(x, z-1, y), south = !neighbourSolid(x, z+1, y),
+                                west = !neighbourSolid(x-1, z, y), east = !neighbourSolid(x+1, z, y),
+                                sideGrass = isGrassSide, trans = trans)
+                        }
                     }
                     // All four sides buried → nothing below can be visible.
-                    if (y != top && neighbourSolid(x - 1, z, y) && neighbourSolid(x + 1, z, y) &&
-                        neighbourSolid(x, z - 1, y) && neighbourSolid(x, z + 1, y)) break
+                    if (y != top && neighbourSolid(x-1, z, y) && neighbourSolid(x+1, z, y) &&
+                        neighbourSolid(x, z-1, y) && neighbourSolid(x, z+1, y)) break
                     y--
                 }
             }
         }
-        return ChunkMesh(toFloatBuffer(verts), verts.size / 12, paths)
+        val n = verts.size / 12
+        val tn = transVerts.size / 12
+        return ChunkMesh(
+            toFloatBuffer(verts), n,
+            if (tn > 0) toFloatBuffer(transVerts) else null, tn,
+            paths
+        )
     }
 
-    private fun grassTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgb(BiomeColors.grassColor(biome))
+    private fun grassTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgba(BiomeColors.grassColor(biome), 1f)
 
-    private fun foliageTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgb(BiomeColors.foliageColor(biome))
+    private fun foliageTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgba(BiomeColors.foliageColor(biome), 1f)
 
     /** Blocks rendered as double-sided X-shaped quads (vanilla cross model). */
     /** Tint for cross plants: foliage colour for leaves-ish plants, grass colour
@@ -570,39 +829,6 @@ class PlayerRenderer(
         "crimson_roots", "warped_roots", "nether_sprouts" -> grassTintOf(biome)
         "sunflower", "lilac", "rose_bush", "peony", "tall_grass" -> foliageTintOf(biome)
         else -> null
-    }
-
-    private fun topTexturePath(block: String): String {
-        val id = block.substringAfter(':')
-        return when (id) {
-            "grass_block" -> "minecraft:block/grass_block_top"
-            "mycelium" -> "minecraft:block/mycelium_top"
-            "podzol" -> "minecraft:block/podzol_top"
-            "dirt_path" -> "minecraft:block/dirt_path_top"
-            "farmland" -> "minecraft:block/farmland"
-            "water" -> "minecraft:block/water_still"
-            "lava" -> "minecraft:block/lava_still"
-            "snow" -> "minecraft:block/snow"
-            else -> if (id.endsWith("_log") || id.endsWith("_stem")) {
-                "minecraft:block/${id}_top"
-            } else {
-                "minecraft:block/$id"
-            }
-        }
-    }
-
-    private fun sideTexturePath(block: String): String {
-        val id = block.substringAfter(':')
-        return when (id) {
-            "grass_block" -> "minecraft:block/grass_block_side"
-            "mycelium" -> "minecraft:block/mycelium_side"
-            "podzol" -> "minecraft:block/podzol_side"
-            "dirt_path" -> "minecraft:block/dirt_path_side"
-            "water" -> "minecraft:block/water_still"
-            "lava" -> "minecraft:block/lava_still"
-            "snow" -> "minecraft:block/snow"
-            else -> "minecraft:block/$id"
-        }
     }
 
     private fun toFloatBuffer(list: ArrayList<Float>): FloatBuffer {
@@ -685,11 +911,18 @@ class PlayerRenderer(
     data class ChunkMesh(
         val vertexBuffer: FloatBuffer,
         val vertexCount: Int,
+        /** Translucent geometry (water, glass, plants, doors): drawn after the
+         *  opaque pass with alpha blending, far→near. */
+        val transBuffer: FloatBuffer?,
+        val transCount: Int,
         /** Texture paths referenced by this mesh (for resolving missing textures). */
         val paths: Set<String>
     )
 
     companion object {
+        private const val WATER_ALPHA = 0.65f
+        private const val DOOR_ALPHA = 0.85f
+
         /** Blocks rendered as double-sided X-shaped quads (vanilla cross model). */
         private val CROSS_BLOCKS = setOf(
             "short_grass", "tall_grass", "fern", "large_fern", "vine", "lily_pad",
@@ -759,7 +992,7 @@ class PlayerRenderer(
                 vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                 float diff = max(dot(normal, lightDir), 0.0);
                 float light = 0.5 + 0.5 * diff;
-                fragColor = vec4(tex.rgb * vColor.rgb * light, 1.0);
+                fragColor = vec4(tex.rgb * vColor.rgb * light, tex.a * vColor.a);
             }
         """
     }

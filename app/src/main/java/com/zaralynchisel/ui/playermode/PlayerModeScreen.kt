@@ -423,7 +423,9 @@ fun PlayerModeScreen(
                                     } else if (!isMultiTouch && event.pointerCount == 1) {
                                         val dx = event.x - lastX
                                         val dy = event.y - lastY
-                                        yaw = (yaw + dx * 0.15f) % 360f
+                                        // Swiping left must turn left: yaw grows counter-
+                                        // clockwise (0 = -Z north, 90 = -X west).
+                                        yaw = (yaw - dx * 0.15f) % 360f
                                         pitch = (pitch - dy * 0.15f).coerceIn(-89f, 89f)
                                         renderer.updateCamera(posX, posY, posZ, yaw, pitch)
                                         lastX = event.x
@@ -459,7 +461,7 @@ fun PlayerModeScreen(
                                     val dy = event.y - mouseY
                                     mouseX = event.x
                                     mouseY = event.y
-                                    yaw = (yaw + dx * 0.3f) % 360f
+                                    yaw = (yaw - dx * 0.3f) % 360f
                                     pitch = (pitch - dy * 0.3f).coerceIn(-89f, 89f)
                                     renderer.updateCamera(posX, posY, posZ, yaw, pitch)
                                     com.zaralynchisel.ui.MainActivity.lastMouseMoveMs = System.currentTimeMillis()

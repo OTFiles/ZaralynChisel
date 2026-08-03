@@ -146,4 +146,13 @@ object BiomeColors {
             ((color shr 8) and 0xFF) / 255f,
             (color and 0xFF) / 255f
         )
+
+    /** Same as [toFloatRgb] but with an explicit alpha (0..1) as the 4th component. */
+    fun toFloatRgba(color: Int, alpha: Float): FloatArray =
+        floatArrayOf(
+            ((color shr 16) and 0xFF) / 255f,
+            ((color shr 8) and 0xFF) / 255f,
+            (color and 0xFF) / 255f,
+            alpha
+        )
 }

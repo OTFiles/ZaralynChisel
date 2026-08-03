@@ -171,12 +171,17 @@ class TextureResolver(private val context: Context) {
             "bamboo" -> return listOf(p("bamboo_stalk"), p("bamboo_block"))
         }
         // Blocks that reuse the base block's texture (stairs/slabs/walls/...).
+        // The original id itself goes FIRST (door/trapdoor/stairs tiles exist as
+        // standalone textures — cherry_door_bottom, cherry_trapdoor…); the base-
+        // derived candidates follow (stone_brick_stairs → stone_bricks, cherry_
+        // stairs → cherry_planks).
         for (suffix in listOf(
             "_stairs", "_slab", "_wall", "_fence_gate", "_fence", "_button",
             "_pressure_plate", "_door", "_trapdoor", "_torch", "_rail", "_sign",
             "_banner", "_carpet", "_sapling", "_flower_pot", "_bed", "_chest"
         )) {
             if (id.endsWith(suffix)) {
+                out.add(p(id))
                 val base = id.removeSuffix(suffix)
                 out.add(p(base))
                 out.add(p(base + "s"))   // stone_brick_stairs → stone_bricks
@@ -193,11 +198,13 @@ class TextureResolver(private val context: Context) {
             out.add(p(id.removeSuffix("_wood") + "_log"))
             out.add(p(id.removeSuffix("_wood") + "_log_top"))
         }
-        // Generic variants.
+        // Generic variants (door_bottom needs no extra rule: cherry_door_bottom
+        // resolves through the generic chain below).
         out.add(p(id + "_top"))
         out.add(p(id + "_side"))
         out.add(p(id + "_front"))
         out.add(p(id + "_still"))
+        out.add(p(id + "_bottom"))
         out.add(p(id))
         return out.toList()
     }

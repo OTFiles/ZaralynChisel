@@ -103,6 +103,8 @@ object MapColorPalette {
             // Doors and trapdoors (wood = brown-ish, iron = grey).
             name.endsWith("_door") || name.endsWith("_trapdoor") ->
                 if (name == "iron_door" || name == "iron_trapdoor") 6 else 13
+            // Slabs and stairs (any material) — solid so they get scanned as surface.
+            name.endsWith("_slab") || name.endsWith("_stairs") -> 10
             name.contains("leaves") || name == "azalea" || name == "flowering_azalea" || name == "mangrove_roots" || name == "moss_block" || name == "moss_carpet" -> 7
             name == "sand" || name == "red_sand" || name == "suspicious_sand" -> 2
             name.startsWith("sandstone") -> 2

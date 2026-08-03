@@ -28,43 +28,52 @@ object ChunkSurfaceReader {
 
     /** Per-column surface data: 16×16 MapColor IDs, absolute surface Y, and the block
      *  names needed to texture the terrain (surface block + stack of blocks below it). */
+    class BlockInfo(val name: String, val props: Map<String, String> = emptyMap())
+
     class SurfaceData(
         val colors: Array<IntArray>,   // [x][z] MapColor id (0 = air)
         val heights: Array<IntArray>,  // [x][z] absolute surface Y, Int.MIN_VALUE if none
-        /** [x][z] → block name at the surface ("minecraft:grass_block"), null if none. */
-        val surfaceBlocks: Array<Array<String?>>,
-        /** [x][z] → block names below the surface: index 0 = the block just below the
-         *  surface, going down, up to [BELOW_SURFACE_SCAN_DEPTH] entries. Only solid
-         *  blocks are recorded (scan stops at the first air). Empty if no surface. */
-        val belowSurface: Array<Array<Array<String?>>>,
+        /** [x][z] → block at the surface ("minecraft:grass_block"), null if none. */
+        val surfaceBlocks: Array<Array<BlockInfo?>>,
+        /** [x][z] → blocks below the surface: index 0 = the block just below the
+         *  surface, going down, up to [BELOW_SURFACE_SCAN_DEPTH] entries. Every
+         *  block is recorded (including air) so caves stay holes; null past the
+         *  end of the scan. Empty if no surface. */
+        val belowSurface: Array<Array<Array<BlockInfo?>>>,
         /** [x][z] → biome id of the column ("minecraft:plains"), null if unknown. */
         val biomes: Array<Array<String?>>
     )
 
     /** Cached palette lookup for one section (avoids re-parsing palette + data per call). */
     private class SectionBlocks(
-        val names: List<String>,
+        val infos: List<BlockInfo>,
         val bits: Int,
         val data: LongArray?
     ) {
-        fun blockAt(x: Int, y: Int, z: Int): String {
-            if (names.size == 1) return names[0]
-            val d = data ?: return names.firstOrNull() ?: "air"
+        fun blockInfoAt(x: Int, y: Int, z: Int): BlockInfo {
+            if (infos.size == 1) return infos[0]
+            val d = data ?: return infos.firstOrNull() ?: BlockInfo("minecraft:air")
             val index = y * 256 + z * 16 + x
             val pi = readPackedLong(d, index, bits)
-            return names.getOrNull(pi) ?: "air"
+            return infos.getOrNull(pi) ?: BlockInfo("minecraft:air")
         }
+
+        fun blockAt(x: Int, y: Int, z: Int): String = blockInfoAt(x, y, z).name
 
         companion object {
             fun from(section: NbtReader.NbtTag.NbtCompound): SectionBlocks {
                 val blockStates = section.getCompound("block_states")
                 val palette = blockStates?.getList("palette")
-                val names = palette?.value?.mapNotNull {
-                    (it as? NbtReader.NbtTag.NbtCompound)?.getString("Name")
+                val infos = palette?.value?.mapNotNull { tag ->
+                    val c = tag as? NbtReader.NbtTag.NbtCompound ?: return@mapNotNull null
+                    val name = c.getString("Name") ?: return@mapNotNull null
+                    val props = (c.getCompound("Properties")?.value ?: emptyMap())
+                        .mapValues { (it.value as? NbtReader.NbtTag.NbtString)?.value ?: "" }
+                    BlockInfo(name, props)
                 } ?: emptyList()
                 val data = blockStates?.getLongArray("data")
-                val bits = maxOf(4, 32 - Integer.numberOfLeadingZeros(names.size - 1))
-                return SectionBlocks(names, bits, data)
+                val bits = maxOf(4, 32 - Integer.numberOfLeadingZeros(infos.size - 1))
+                return SectionBlocks(infos, bits, data)
             }
         }
     }
@@ -106,8 +115,8 @@ object ChunkSurfaceReader {
     ): SurfaceData {
         val colors = Array(16) { IntArray(16) { 0 } }
         val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
-        val surfaceBlocks = Array(16) { arrayOfNulls<String>(16) }
-        val belowSurface = Array(16) { Array(16) { arrayOfNulls<String>(0) } }
+        val surfaceBlocks = Array(16) { arrayOfNulls<BlockInfo>(16) }
+        val belowSurface = Array(16) { Array(16) { arrayOfNulls<BlockInfo>(0) } }
         val biomes = Array(16) { arrayOfNulls<String>(16) }
         val doLog = logCount < 3
         try {
@@ -180,19 +189,21 @@ object ChunkSurfaceReader {
                     if (heightsAbs != null) {
                         val index = z * 16 + x
                         val topY = heightsAbs[index].coerceAtLeast(worldMinY)
-                        // Scan down a few blocks to robustly resolve the topmost non-air block
-                        // (absorbs any +/-1 ambiguity in the heightmap definition).
-                        for (dy in 0 until SURFACE_SCAN_DEPTH) {
+                        // Scan from 2 above the heightmap top down: non-motion-blocking
+                        // plants (wheat, sugar cane, flowers…) sit on top of the
+                        // heightmap's surface block, so they'd be missed by a
+                        // downward-only scan.
+                        for (dy in -2 until SURFACE_SCAN_DEPTH) {
                             val y = topY - dy
                             if (y < worldMinY) break
                             val section = sectionByY[y shr 4] ?: continue
                             val blockY = y and 15
-                            val name = section.blockAt(x, blockY, z)
-                            val cid = MapColorPalette.getMapColorId(name)
+                            val info = section.blockInfoAt(x, blockY, z)
+                            val cid = MapColorPalette.getMapColorId(info.name)
                             if (cid > 0) {
                                 colors[x][z] = cid
                                 heights[x][z] = y
-                                surfaceBlocks[x][z] = name
+                                surfaceBlocks[x][z] = info
                                 biomes[x][z] = sectionBiomes[y shr 4]?.biomeAt(x, y and 15, z)
                                 break
                             }
@@ -202,12 +213,12 @@ object ChunkSurfaceReader {
                         for (section in sectionsDesc) {
                             var found = false
                             for (y in 15 downTo 0) {
-                                val name = sectionByY[section.getInt("Y")]!!.blockAt(x, y, z)
-                                val cid = MapColorPalette.getMapColorId(name)
+                                val info = sectionByY[section.getInt("Y")]!!.blockInfoAt(x, y, z)
+                                val cid = MapColorPalette.getMapColorId(info.name)
                                 if (cid > 0) {
                                     colors[x][z] = cid
                                     heights[x][z] = section.getInt("Y") * 16 + y
-                                    surfaceBlocks[x][z] = name
+                                    surfaceBlocks[x][z] = info
                                     biomes[x][z] = sectionBiomes[section.getInt("Y")]?.biomeAt(x, y, z)
                                     found = true
                                     break
@@ -219,21 +230,20 @@ object ChunkSurfaceReader {
                 }
             }
 
-            // Record the solid block stack below each surface column (for cliff walls).
-            // Stops at the first air block (cave); deeper gaps are filled with stone
-            // by the mesh builder.
+            // Record the full block stack below each surface column (for cliff walls
+            // and caves): EVERY block is kept, including air, so air pockets under
+            // overhangs stay holes instead of being filled with stone. The mesh
+            // builder treats anything past the end of the stack as air.
             for (x in 0 until 16) {
                 for (z in 0 until 16) {
                     val top = heights[x][z]
                     if (top == Int.MIN_VALUE) continue
-                    val stack = ArrayList<String>(BELOW_SURFACE_SCAN_DEPTH)
+                    val stack = ArrayList<BlockInfo>(BELOW_SURFACE_SCAN_DEPTH)
                     for (dy in 1..BELOW_SURFACE_SCAN_DEPTH) {
                         val y = top - dy
                         if (y < worldMinY) break
                         val section = sectionByY[y shr 4] ?: break
-                        val name = section.blockAt(x, y and 15, z)
-                        if (name.endsWith("air")) break
-                        stack.add(name)
+                        stack.add(section.blockInfoAt(x, y and 15, z))
                     }
                     belowSurface[x][z] = stack.toTypedArray()
                 }
@@ -256,8 +266,8 @@ object ChunkSurfaceReader {
     private fun heightGradient(heightsAbs: IntArray?): SurfaceData {
         val colors = Array(16) { IntArray(16) }
         val heights = Array(16) { IntArray(16) { Int.MIN_VALUE } }
-        val surfaceBlocks = Array(16) { arrayOfNulls<String>(16) }
-        val belowSurface = Array(16) { Array(16) { arrayOfNulls<String>(0) } }
+        val surfaceBlocks = Array(16) { arrayOfNulls<BlockInfo>(16) }
+        val belowSurface = Array(16) { Array(16) { arrayOfNulls<BlockInfo>(0) } }
         val biomes = Array(16) { arrayOfNulls<String>(16) }
         if (heightsAbs == null) return SurfaceData(colors, heights, surfaceBlocks, belowSurface, biomes)
         for (x in 0 until 16) {
