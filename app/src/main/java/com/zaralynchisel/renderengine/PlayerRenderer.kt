@@ -98,6 +98,8 @@ class PlayerRenderer(
     @Volatile
     private var textureResolver: com.zaralynchisel.fileaccess.TextureResolver? = null
 
+    private val meshLogCount = java.util.concurrent.atomic.AtomicInteger()
+
     private val atlas = TextureAtlas()
 
     private var shaderProgram = 0
@@ -402,6 +404,7 @@ class PlayerRenderer(
      *  reprocess any chunks that were built without textures. */
     fun setTextureResolver(resolver: com.zaralynchisel.fileaccess.TextureResolver) {
         textureResolver = resolver
+        resolver.modelSource()?.let { (dir, ver) -> ModelLoader.init(dir, ver) }
         val keys = pendingData.keys.toList()
         pendingData.clear()
         for (k in keys) {
@@ -441,8 +444,10 @@ class PlayerRenderer(
         /** Is the column (colX, colZ) of chunk (nx, nz) solid at height y?
          *  Beyond the 40-block stack depth, or missing neighbor data, counts as
          *  AIR so exposed cliff walls keep rendering; cross-model plants are not
-         *  solid (they're thin and must not occlude cubes behind them). */
-        fun solidAt(nx: Int, nz: Int, colX: Int, colZ: Int, y: Int): Boolean {
+         *  solid (they're thin and must not occlude cubes behind them).
+         *  [excludeWater] treats water as air — used when culling TOP faces so
+         *  the riverbed under water stays visible. */
+        fun solidAt(nx: Int, nz: Int, colX: Int, colZ: Int, y: Int, excludeWater: Boolean = false): Boolean {
             val d = if (nx == chunkX && nz == chunkZ) data else chunkDataCache[chunkKey(nx, nz)]
             if (d == null) {
                 // Neighbour chunk not loaded: mirror our edge column so no fake
@@ -458,15 +463,16 @@ class PlayerRenderer(
             val id = info.name.substringAfter(':')
             if (id.endsWith("air")) return false
             if (id in CROSS_BLOCKS) return false
+            if (excludeWater && id == "water") return false
             return true
         }
 
-        fun neighbourSolid(x: Int, z: Int, y: Int): Boolean = when {
-            x in 0..15 && z in 0..15 -> solidAt(chunkX, chunkZ, x, z, y)
-            x < 0 -> solidAt(chunkX - 1, chunkZ, x + 16, z, y)
-            x > 15 -> solidAt(chunkX + 1, chunkZ, x - 16, z, y)
-            z < 0 -> solidAt(chunkX, chunkZ - 1, x, z + 16, y)
-            else -> solidAt(chunkX, chunkZ + 1, x, z - 16, y)
+        fun neighbourSolid(x: Int, z: Int, y: Int, excludeWater: Boolean = false): Boolean = when {
+            x in 0..15 && z in 0..15 -> solidAt(chunkX, chunkZ, x, z, y, excludeWater)
+            x < 0 -> solidAt(chunkX - 1, chunkZ, x + 16, z, y, excludeWater)
+            x > 15 -> solidAt(chunkX + 1, chunkZ, x - 16, z, y, excludeWater)
+            z < 0 -> solidAt(chunkX, chunkZ - 1, x, z + 16, y, excludeWater)
+            else -> solidAt(chunkX, chunkZ + 1, x, z - 16, y, excludeWater)
         }
 
         /** Block info at (x, z) of this chunk at height y; null = air (or beyond scan). */
@@ -477,13 +483,15 @@ class PlayerRenderer(
         }
 
         /** Emit one rectangle (axis-aligned, on the X/Y/Z plane through the block at
-         *  (bx,by,bz)) into the opaque or translucent vertex list. UVs span the rect. */
+         *  (bx,by,bz)) into the opaque or translucent vertex list. UVs span the
+         *  given sub-rectangle of the tile (default: the whole tile). */
         fun emitRect(
             bx: Float, by: Float, bz: Float,
             nx: Float, ny: Float, nz: Float,
             x0: Float, y0: Float, z0: Float,
             x1: Float, y1: Float, z1: Float,
             tile: Int, color: FloatArray?, alpha: Float,
+            u0: Float = 0f, v0: Float = 0f, u1: Float = 1f, v1: Float = 1f,
             sideGrassStrip: Boolean = false,
             trans: Boolean = false
         ) {
@@ -525,8 +533,8 @@ class PlayerRenderer(
             val a = alpha
             for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
                 val p = c[k]
-                val u = if (maxA > minA) (p[axA]-minA)/(maxA-minA) else 0f
-                val t = if (maxB > minB) (p[axB]-minB)/(maxB-minB) else 0f
+                val u = if (maxA > minA) u0 + (p[axA]-minA)/(maxA-minA)*(u1-u0) else u0
+                val t = if (maxB > minB) v0 + (p[axB]-minB)/(maxB-minB)*(v1-v0) else v0
                 target.add(bx+p[0]); target.add(by+p[1]); target.add(bz+p[2])
                 target.add(nx); target.add(ny); target.add(nz)
                 target.add(u0 + u*TextureAtlas.TILE_UV); target.add(v0 + t*TextureAtlas.TILE_UV)
@@ -564,7 +572,7 @@ class PlayerRenderer(
         fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?) {
             val uv = atlas.uvOrigin(tile)
             val u0 = uv[0]; val v0 = uv[1]
-            for (face in arrayOf(CROSS_1, CROSS_2)) {
+            for ((fi, face) in arrayOf(CROSS_1, CROSS_2).withIndex()) {
                 for (back in 0..1) {
                     val v = face.vertices
                     for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
@@ -573,10 +581,68 @@ class PlayerRenderer(
                         transVerts.add(bx+px); transVerts.add(by+py); transVerts.add(bz+pz)
                         val n = if (back == 0) 1f else -1f
                         transVerts.add(face.nx*n); transVerts.add(face.ny*n); transVerts.add(face.nz*n)
-                        transVerts.add(u0 + px*TextureAtlas.TILE_UV); transVerts.add(v0 + pz*TextureAtlas.TILE_UV)
+                        // UV axes must be orthogonal in the quad plane: u runs along
+                        // the face's horizontal diagonal, v along y. Using (px,pz)
+                        // directly made u == v (both along the same diagonal), so the
+                        // whole quad sampled one diagonal line — the "stretched pixel".
+                        val u = if (fi == 0) (px + pz) * 0.5f else (1f - px + pz) * 0.5f
+                        transVerts.add(u0 + u*TextureAtlas.TILE_UV); transVerts.add(v0 + py*TextureAtlas.TILE_UV)
                         val c = tint ?: WHITE
                         val a = c.getOrElse(3) { 1f }
                         transVerts.add(c[0]); transVerts.add(c[1]); transVerts.add(c[2]); transVerts.add(a)
+                    }
+                }
+            }
+        }
+
+        /** Emit a BlueMap-style model: every element face with cullface checks. */
+        fun emitModel(
+            bx: Float, by: Float, bz: Float,
+            model: ModelLoader.ResolvedModel,
+            blockId: String, biome: String?,
+            alpha: Float, trans: Boolean, solidAbove: Boolean,
+            x: Int, z: Int, y: Int
+        ) {
+            // Tint colour by block family; applied ONLY to faces whose model
+            // declares tintindex (grass top, leaves, plants… — vanilla behaviour).
+            val familyTint = when (blockId) {
+                "grass_block", "mycelium", "podzol" -> grassTint
+                "oak_leaves", "birch_leaves", "spruce_leaves", "jungle_leaves",
+                "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "azalea_leaves",
+                "flowering_azalea_leaves", "cherry_leaves" -> foliageTintOf(biome)
+                else -> if (blockId in CROSS_BLOCKS) crossTintOf(blockId, biome) else null
+            }
+            for (el in model.elements) {
+                for (f in el.faces) {
+                    val occluded = when (f.cullDir) {
+                        -1 -> false
+                        0 -> false
+                        1 -> solidAbove
+                        2 -> neighbourSolid(x, z - 1, y)
+                        3 -> neighbourSolid(x, z + 1, y)
+                        4 -> neighbourSolid(x - 1, z, y)
+                        5 -> neighbourSolid(x + 1, z, y)
+                        else -> false
+                    }
+                    if (occluded) continue
+                    val nx: Float; val ny: Float; val nz: Float
+                    when (f.dir) {
+                        0 -> { nx = 0f; ny = -1f; nz = 0f }
+                        1 -> { nx = 0f; ny = 1f; nz = 0f }
+                        2 -> { nx = 0f; ny = 0f; nz = -1f }
+                        3 -> { nx = 0f; ny = 0f; nz = 1f }
+                        4 -> { nx = -1f; ny = 0f; nz = 0f }
+                        else -> { nx = 1f; ny = 0f; nz = 0f }
+                    }
+                    paths.add(f.texPath)
+                    val tile = atlas.tileFor(f.texPath)
+                    val tint = if (f.tint >= 0) familyTint else null
+                    emitRect(bx, by, bz, nx, ny, nz, el.x0, el.y0, el.z0, el.x1, el.y1, el.z1,
+                        tile, tint, alpha, f.u0, f.v0, f.u1, f.v1, trans = trans)
+                    if (f.cullDir < 0) {
+                        // No cullface: visible from both sides (cross plants, thin panels).
+                        emitRect(bx, by, bz, -nx, -ny, -nz, el.x0, el.y0, el.z0, el.x1, el.y1, el.z1,
+                            tile, tint, alpha, f.u0, f.v0, f.u1, f.v1, trans = trans)
                     }
                 }
             }
@@ -606,10 +672,31 @@ class PlayerRenderer(
                     val bx = (baseX + x).toFloat()
                     val bz = (baseZ + z).toFloat()
                     val by = y.toFloat()
-                    val solidAbove = neighbourSolid(x, z, y + 1)
+                    // Water never occludes a TOP face (the riverbed under water must
+                    // stay visible through the translucent water above it).
+                    val solidAbove = neighbourSolid(x, z, y + 1, excludeWater = true)
 
-                    // Cross-model plants render as X quads (translucent pass — their
-                    // textures have real alpha that would otherwise turn black).
+                    val isWater = blockId == "water"
+                    val alpha = when {
+                        isWater -> WATER_ALPHA
+                        blockId.endsWith("_door") || blockId.endsWith("_trapdoor") -> DOOR_ALPHA
+                        else -> 1f
+                    }
+                    // BlueMap-style: the vanilla model wins when one exists. Water is
+                    // handled specially below (its model is a plain cube).
+                    val model = if (!isWater) ModelLoader.getModel(blockId, props) else null
+                    val trans = isWater || blockId.endsWith("_door") || blockId.endsWith("_trapdoor") ||
+                        isTranslucent(blockId) || (model != null && modelHasAlpha(model))
+                    if (model != null && model.elements.isNotEmpty()) {
+                        emitModel(bx, by, bz, model, blockId, biome, alpha, trans, solidAbove, x, z, y)
+                        // All four sides buried → nothing below can be visible.
+                        if (y != top && neighbourSolid(x-1, z, y) && neighbourSolid(x+1, z, y) &&
+                            neighbourSolid(x, z-1, y) && neighbourSolid(x, z+1, y)) break
+                        y--
+                        continue
+                    }
+                    // Cross-model plants without a model file (modded) still render
+                    // as X quads (translucent pass — their textures have real alpha).
                     if (blockId in CROSS_BLOCKS) {
                         val p = "minecraft:block/$blockId"
                         paths.add(p)
@@ -618,7 +705,6 @@ class PlayerRenderer(
                         continue
                     }
 
-                    val isWater = blockId == "water"
                     val waterTint = if (isWater) BiomeColors.toFloatRgba(BiomeColors.waterColor(biome), WATER_ALPHA) else null
                     // Water surface sits 1/8 below the block top (vanilla look).
                     val waterDrop = if (isWater && y == top) 0.125f else 0f
@@ -658,13 +744,6 @@ class PlayerRenderer(
                     paths.add(sideP); paths.add(topP)
                     val tile = atlas.tileFor(sideP)
                     val topTile = atlas.tileFor(topP)
-                    val alpha = when {
-                        isWater -> WATER_ALPHA
-                        blockId.endsWith("_door") || blockId.endsWith("_trapdoor") -> DOOR_ALPHA
-                        else -> 1f
-                    }
-                    val trans = isWater || blockId.endsWith("_door") || blockId.endsWith("_trapdoor")
-
                     when {
                         blockId.endsWith("_slab") -> {
                             val type = props["type"] ?: "bottom"
@@ -691,14 +770,14 @@ class PlayerRenderer(
                             val (bx0, bz0, bx1, bz1) = when (facing) {
                                 "north" -> floatArrayOf(0f, 0.5f, 1f, 1f)   // south half
                                 "south" -> floatArrayOf(0f, 0f, 1f, 0.5f)   // north half
-                                "west" -> floatArrayOf(0.5f, 0f, 1f, 1f)    // east half
-                                else -> floatArrayOf(0f, 0f, 0.5f, 1f)       // west half
+                                "west" -> floatArrayOf(0f, 0f, 0.5f, 1f)    // west half
+                                else -> floatArrayOf(0.5f, 0f, 1f, 1f)      // east half
                             }
                             val (fx0, fz0, fx1, fz1) = when (facing) {
                                 "north" -> floatArrayOf(0f, 0f, 1f, 0.5f)
                                 "south" -> floatArrayOf(0f, 0.5f, 1f, 1f)
-                                "west" -> floatArrayOf(0f, 0f, 0.5f, 1f)
-                                else -> floatArrayOf(0.5f, 0f, 1f, 1f)
+                                "west" -> floatArrayOf(0.5f, 0f, 1f, 1f)
+                                else -> floatArrayOf(0f, 0f, 0.5f, 1f)
                             }
                             val sN = !neighbourSolid(x, z-1, y); val sS = !neighbourSolid(x, z+1, y)
                             val sW = !neighbourSolid(x-1, z, y); val sE = !neighbourSolid(x+1, z, y)
@@ -815,11 +894,44 @@ class PlayerRenderer(
         }
         val n = verts.size / 12
         val tn = transVerts.size / 12
+        if (meshLogCount.incrementAndGet() <= 30) {
+            val surf = heights.sumOf { row -> row.count { it != Int.MIN_VALUE } }
+            Logger.d("mesh($chunkX,$chunkZ): surface=$surf/256 verts=$n trans=$tn paths=${paths.size}")
+        }
         return ChunkMesh(
             toFloatBuffer(verts), n,
             if (tn > 0) toFloatBuffer(transVerts) else null, tn,
             paths
         )
+    }
+
+    /** Blocks whose textures have transparent pixels: must draw in the translucent
+     *  pass (otherwise the alpha=0 pixels render black). Covers all cross plants
+     *  plus the common cutout families. */
+    private fun isTranslucent(id: String): Boolean =
+        id in CROSS_BLOCKS || id.contains("glass") || id.contains("pane") ||
+        id == "ice" || id == "frosted_ice" || id == "chain" || id == "vine" ||
+        id == "lily_pad" || id == "cactus" || id == "ladder" || id == "lever" ||
+        id == "cobweb" || id == "scaffolding" || id == "flower_pot" ||
+        id == "kelp" || id == "seagrass" || id == "tall_seagrass" ||
+        id.contains("torch") || id.contains("lantern") || id.contains("campfire") ||
+        id.contains("candle") || id.contains("rail") || id.contains("sign") ||
+        id.contains("fungus") || id.contains("roots") || id.contains("sapling") ||
+        id == "nether_sprouts" || id == "mangrove_propagule" || id == "moss_carpet" ||
+        id == "spore_blossom" || id == "glow_lichen" || id == "hanging_roots" ||
+        id == "pointed_dripstone" || id == "amethyst_cluster" ||
+        id.endsWith("_bud") || id.endsWith("_coral") || id == "bubble_column" ||
+        id.endsWith("_button") || id.endsWith("_pressure_plate") || id.endsWith("_fence") ||
+        id.endsWith("_fence_gate")
+
+    /** True when any texture referenced by [model] has transparent pixels. */
+    private fun modelHasAlpha(model: ModelLoader.ResolvedModel): Boolean {
+        for (el in model.elements) {
+            for (f in el.faces) {
+                if (atlas.hasAlpha(f.texPath)) return true
+            }
+        }
+        return false
     }
 
     private fun grassTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgba(BiomeColors.grassColor(biome), 1f)

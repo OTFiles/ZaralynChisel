@@ -362,6 +362,7 @@ fun PlayerModeScreen(
                     try {
                         textureResolver.close()
                     } catch (_: Exception) { }
+                    com.zaralynchisel.renderengine.ModelLoader.close()
                     Logger.d("PlayerMode onDispose: done")
                 }
             }

@@ -50,6 +50,12 @@ class TextureResolver(private val context: Context) {
         this.version = version
     }
 
+    /** (minecraftDir, version) once initialized — feeds the model loader. */
+    fun modelSource(): Pair<String, String>? {
+        val dir = minecraftDir ?: return null
+        return dir to version
+    }
+
     /**
      * Resolve a block texture by its resource path ("minecraft:block/stone").
      * Returns null only if ALL sources fail.
@@ -198,14 +204,15 @@ class TextureResolver(private val context: Context) {
             out.add(p(id.removeSuffix("_wood") + "_log"))
             out.add(p(id.removeSuffix("_wood") + "_log_top"))
         }
-        // Generic variants (door_bottom needs no extra rule: cherry_door_bottom
-        // resolves through the generic chain below).
+        // Generic variants. The plain id goes FIRST: oak_log must resolve to the
+        // side texture, not oak_log_top (which used to win and made logs look
+        // like their top face on every side).
+        out.add(p(id))
         out.add(p(id + "_top"))
         out.add(p(id + "_side"))
         out.add(p(id + "_front"))
         out.add(p(id + "_still"))
         out.add(p(id + "_bottom"))
-        out.add(p(id))
         return out.toList()
     }
 

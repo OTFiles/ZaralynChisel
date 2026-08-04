@@ -37,6 +37,8 @@ class TextureAtlas {
 
     private val pathToTile = HashMap<String, Int>()
     private val pendingTiles = ConcurrentLinkedQueue<Pair<Int, Bitmap>>()
+    /** Texture paths whose PNG has any transparent pixel (translucent pass). */
+    private val alphaPaths = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private var nextTile = 1
 
     /** CPU-side accumulated atlas; the GL texture mirrors it. */
@@ -67,6 +69,9 @@ class TextureAtlas {
     @Synchronized
     fun has(path: String): Boolean = pathToTile[path] != null && pathToTile[path] != MISSING_TILE
 
+    /** True once a texture with transparent pixels was registered for [path]. */
+    fun hasAlpha(path: String): Boolean = alphaPaths.contains(path)
+
     /** Atlas UV origin (u0, v0) for a tile. */
     @Synchronized
     fun uvOrigin(tile: Int): FloatArray {
@@ -95,6 +100,21 @@ class TextureAtlas {
 
         val tile = nextTile++
         pathToTile[path] = tile
+        // Textures with transparent pixels must render in the translucent pass
+        // (plants, glass, torches…). Sampled coarsely — pixel art is 16×16.
+        if (!alphaPaths.contains(path)) {
+            scan@ for (py in 0 until TILE_SIZE step 4) {
+                for (px in 0 until TILE_SIZE step 4) {
+                    val a = android.graphics.Color.alpha(
+                        bmp.getPixel(px.coerceAtMost(bmp.width - 1), py.coerceAtMost(bmp.height - 1))
+                    )
+                    if (a < 255) {
+                        alphaPaths.add(path)
+                        break@scan
+                    }
+                }
+            }
+        }
         val scaled = Bitmap.createScaledBitmap(bmp, TILE_SIZE, TILE_SIZE, true)
         // GL texture row 0 (v=0) is the image's LAST row in memory, so flip the
         // tile vertically to keep the texture upright when sampled.

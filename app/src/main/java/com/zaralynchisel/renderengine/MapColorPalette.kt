@@ -208,7 +208,11 @@ object MapColorPalette {
             }
             name == "sculk" || name.startsWith("sculk_") -> 29
             name == "kelp" || name == "seagrass" || name == "tall_seagrass" -> 7
-            else -> 0
+            // Fences (wood = brown-ish).
+            name.endsWith("_fence") || name == "fence" -> 13
+            // Bamboo mosaic / any unknown block: render at least (stone-ish colour).
+            // Air/barrier/light stay invisible via the rule at the top.
+            else -> 11
         }
     }
 }
