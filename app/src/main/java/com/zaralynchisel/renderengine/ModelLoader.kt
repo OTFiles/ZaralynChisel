@@ -8,7 +8,7 @@ import java.util.zip.ZipFile
 
 /**
  * BlueMap-style block model loader: parses the vanilla client jar's
- * blockstates/*.json and models/*.json (parent chains, texture variables,
+ * blockstates JSON and models JSON (parent chains, texture variables,
  * multipart parts, variant matching, model-level x/y rotations) into flat
  * per-face geometry that PlayerRenderer emits directly. Blocks without a
  * model (or an unreadable jar) fall back to the cube/cross approximations.
