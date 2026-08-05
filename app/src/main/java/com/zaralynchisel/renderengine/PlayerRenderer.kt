@@ -462,7 +462,10 @@ class PlayerRenderer(
             if (info == null) return false
             val id = info.name.substringAfter(':')
             if (id.endsWith("air")) return false
-            if (id in CROSS_BLOCKS) return false
+            // Hollow/translucent blocks (fences, leaves, glass, plants…) never
+            // occlude neighbours — otherwise cube faces behind a fence or inside
+            // a tree canopy get culled and vanish.
+            if (isTranslucent(id)) return false
             if (excludeWater && id == "water") return false
             return true
         }
@@ -534,13 +537,21 @@ class PlayerRenderer(
             for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
                 val p = c[k]
                 val u = if (maxA > minA) u0 + (p[axA]-minA)/(maxA-minA)*(u1-u0) else u0
-                val t = if (maxB > minB) v0 + (p[axB]-minB)/(maxB-minB)*(v1-v0) else v0
+                // v along the vertical (y) axis is FLIPPED: vanilla uv v runs
+                // top→bottom while geometry y runs bottom→top. Without the flip,
+                // every sub-rectangle uv (stairs sides, bookshelves, lanterns…)
+                // rendered upside-down and looked stretched.
+                val t = if (maxB > minB) {
+                    if (axB == 1) v1 - (p[axB]-minB)/(maxB-minB)*(v1-v0)
+                    else v0 + (p[axB]-minB)/(maxB-minB)*(v1-v0)
+                } else v0
                 target.add(bx+p[0]); target.add(by+p[1]); target.add(bz+p[2])
                 target.add(nx); target.add(ny); target.add(nz)
                 target.add(u0 + u*TextureAtlas.TILE_UV); target.add(v0 + t*TextureAtlas.TILE_UV)
                 val cc = when {
-                    // Grass-block side: only the top strip (t >= 0.75) is grass-coloured.
-                    sideGrassStrip && ny == 0f && t >= 0.75f -> grassTint
+                    // Grass-block side: only the top strip (t <= 0.25 after the v
+                    // flip) is grass-coloured.
+                    sideGrassStrip && ny == 0f && t <= 0.25f -> grassTint
                     color != null -> color
                     else -> WHITE
                 }
@@ -586,7 +597,7 @@ class PlayerRenderer(
                         // directly made u == v (both along the same diagonal), so the
                         // whole quad sampled one diagonal line — the "stretched pixel".
                         val u = if (fi == 0) (px + pz) * 0.5f else (1f - px + pz) * 0.5f
-                        transVerts.add(u0 + u*TextureAtlas.TILE_UV); transVerts.add(v0 + py*TextureAtlas.TILE_UV)
+                        transVerts.add(u0 + u*TextureAtlas.TILE_UV); transVerts.add(v0 + (1f - py)*TextureAtlas.TILE_UV)
                         val c = tint ?: WHITE
                         val a = c.getOrElse(3) { 1f }
                         transVerts.add(c[0]); transVerts.add(c[1]); transVerts.add(c[2]); transVerts.add(a)
@@ -618,10 +629,10 @@ class PlayerRenderer(
                         -1 -> false
                         0 -> false
                         1 -> solidAbove
-                        2 -> neighbourSolid(x, z - 1, y)
-                        3 -> neighbourSolid(x, z + 1, y)
-                        4 -> neighbourSolid(x - 1, z, y)
-                        5 -> neighbourSolid(x + 1, z, y)
+                        2 -> neighbourSolid(x, z - 1, y, excludeWater = true)
+                        3 -> neighbourSolid(x, z + 1, y, excludeWater = true)
+                        4 -> neighbourSolid(x - 1, z, y, excludeWater = true)
+                        5 -> neighbourSolid(x + 1, z, y, excludeWater = true)
                         else -> false
                     }
                     if (occluded) continue
@@ -690,8 +701,8 @@ class PlayerRenderer(
                     if (model != null && model.elements.isNotEmpty()) {
                         emitModel(bx, by, bz, model, blockId, biome, alpha, trans, solidAbove, x, z, y)
                         // All four sides buried → nothing below can be visible.
-                        if (y != top && neighbourSolid(x-1, z, y) && neighbourSolid(x+1, z, y) &&
-                            neighbourSolid(x, z-1, y) && neighbourSolid(x, z+1, y)) break
+                        if (y != top && neighbourSolid(x-1, z, y, excludeWater = true) && neighbourSolid(x+1, z, y, excludeWater = true) &&
+                            neighbourSolid(x, z-1, y, excludeWater = true) && neighbourSolid(x, z+1, y, excludeWater = true)) break
                         y--
                         continue
                     }
@@ -750,15 +761,15 @@ class PlayerRenderer(
                             if (type == "double") {
                                 emitBox(bx, wby, bz, 0f,0f,0f, 1f,1f,1f, tile, topTint, alpha, topTile = topTile,
                                     top = !solidAbove, bottom = false,
-                                    north = !neighbourSolid(x, z-1, y), south = !neighbourSolid(x, z+1, y),
-                                    west = !neighbourSolid(x-1, z, y), east = !neighbourSolid(x+1, z, y),
+                                    north = !neighbourSolid(x, z-1, y, excludeWater = true), south = !neighbourSolid(x, z+1, y, excludeWater = true),
+                                    west = !neighbourSolid(x-1, z, y, excludeWater = true), east = !neighbourSolid(x+1, z, y, excludeWater = true),
                                     sideGrass = isGrassSide, trans = trans)
                             } else {
                                 val y0 = if (type == "bottom") 0f else 0.5f
                                 emitBox(bx, wby, bz, 0f,y0,0f, 1f,y0+0.5f,1f, tile, topTint, alpha, topTile = topTile,
                                     top = !solidAbove, bottom = false,
-                                    north = !neighbourSolid(x, z-1, y), south = !neighbourSolid(x, z+1, y),
-                                    west = !neighbourSolid(x-1, z, y), east = !neighbourSolid(x+1, z, y),
+                                    north = !neighbourSolid(x, z-1, y, excludeWater = true), south = !neighbourSolid(x, z+1, y, excludeWater = true),
+                                    west = !neighbourSolid(x-1, z, y, excludeWater = true), east = !neighbourSolid(x+1, z, y, excludeWater = true),
                                     sideGrass = isGrassSide, trans = trans)
                             }
                         }
@@ -779,8 +790,8 @@ class PlayerRenderer(
                                 "west" -> floatArrayOf(0.5f, 0f, 1f, 1f)
                                 else -> floatArrayOf(0f, 0f, 0.5f, 1f)
                             }
-                            val sN = !neighbourSolid(x, z-1, y); val sS = !neighbourSolid(x, z+1, y)
-                            val sW = !neighbourSolid(x-1, z, y); val sE = !neighbourSolid(x+1, z, y)
+                            val sN = !neighbourSolid(x, z-1, y, excludeWater = true); val sS = !neighbourSolid(x, z+1, y, excludeWater = true)
+                            val sW = !neighbourSolid(x-1, z, y, excludeWater = true); val sE = !neighbourSolid(x+1, z, y, excludeWater = true)
                             // Bottom box: full footprint, y..y+0.5.
                             emitBox(bx, by, bz, 0f,0f,0f, 1f,0.5f,1f, tile, topTint, alpha, topTile = topTile,
                                 top = false, bottom = false,
@@ -818,8 +829,8 @@ class PlayerRenderer(
                             }
                             val doorTile = atlas.tileFor(if (props["half"] == "upper") "minecraft:block/${blockId}_top" else "minecraft:block/${blockId}_bottom")
                             paths.add("minecraft:block/${blockId}_top"); paths.add("minecraft:block/${blockId}_bottom")
-                            val sN = !neighbourSolid(x, z-1, y); val sS = !neighbourSolid(x, z+1, y)
-                            val sW = !neighbourSolid(x-1, z, y); val sE = !neighbourSolid(x+1, z, y)
+                            val sN = !neighbourSolid(x, z-1, y, excludeWater = true); val sS = !neighbourSolid(x, z+1, y, excludeWater = true)
+                            val sW = !neighbourSolid(x-1, z, y, excludeWater = true); val sE = !neighbourSolid(x+1, z, y, excludeWater = true)
                             emitBox(bx, by, bz, px0,0f,pz0, px1,1f,pz1, doorTile, null, alpha, topTile = topTile,
                                 top = !solidAbove, bottom = false,
                                 north = sN, south = sS, west = sW, east = sE, trans = trans)
@@ -829,8 +840,8 @@ class PlayerRenderer(
                             val open = props["open"] == "true"
                             val facing = props["facing"] ?: "north"
                             val t = 0.1875f
-                            val sN = !neighbourSolid(x, z-1, y); val sS = !neighbourSolid(x, z+1, y)
-                            val sW = !neighbourSolid(x-1, z, y); val sE = !neighbourSolid(x+1, z, y)
+                            val sN = !neighbourSolid(x, z-1, y, excludeWater = true); val sS = !neighbourSolid(x, z+1, y, excludeWater = true)
+                            val sW = !neighbourSolid(x-1, z, y, excludeWater = true); val sE = !neighbourSolid(x+1, z, y, excludeWater = true)
                             if (open) {
                                 // Vertical panel at the facing edge (like a closed door).
                                 val (dx, dz) = when (facing) {
@@ -871,8 +882,8 @@ class PlayerRenderer(
                                 // Full glass cube (cutout look via texture alpha).
                                 emitBox(bx, by, bz, 0f,0f,0f, 1f,1f,1f, tile, topTint, 1f,
                                     top = !solidAbove, bottom = false,
-                                    north = !neighbourSolid(x, z-1, y), south = !neighbourSolid(x, z+1, y),
-                                    west = !neighbourSolid(x-1, z, y), east = !neighbourSolid(x+1, z, y),
+                                    north = !neighbourSolid(x, z-1, y, excludeWater = true), south = !neighbourSolid(x, z+1, y, excludeWater = true),
+                                    west = !neighbourSolid(x-1, z, y, excludeWater = true), east = !neighbourSolid(x+1, z, y, excludeWater = true),
                                     sideGrass = isGrassSide, trans = true)
                             }
                         }
@@ -910,6 +921,8 @@ class PlayerRenderer(
      *  plus the common cutout families. */
     private fun isTranslucent(id: String): Boolean =
         id in CROSS_BLOCKS || id.contains("glass") || id.contains("pane") ||
+        id.contains("leaves") || id == "azalea" || id == "flowering_azalea" ||
+        id == "mangrove_roots" || id == "moss_carpet" || id == "vine" ||
         id == "ice" || id == "frosted_ice" || id == "chain" || id == "vine" ||
         id == "lily_pad" || id == "cactus" || id == "ladder" || id == "lever" ||
         id == "cobweb" || id == "scaffolding" || id == "flower_pot" ||

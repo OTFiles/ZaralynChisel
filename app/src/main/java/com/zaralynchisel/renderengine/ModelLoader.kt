@@ -120,7 +120,9 @@ object ModelLoader {
         if (variants != null) {
             val key = props.entries.sortedBy { it.key }
                 .joinToString(",") { "${it.key}=${it.value}" }
-            val v = variants.optJSONObject(key) ?: variants.optJSONObject("")
+            val v = variants.optJSONObject(key)
+                ?: variants.optJSONObject("")
+                ?: matchVariantSubset(variants, props)
             if (v != null) addVariant(elements, v)
             return ResolvedModel(elements)
         }
@@ -130,8 +132,15 @@ object ModelLoader {
                 val part = multi.optJSONObject(i) ?: continue
                 val whenObj = part.optJSONObject("when")
                 if (whenObj != null && !matchesWhen(whenObj, props)) continue
-                val apply = part.optJSONObject("apply") ?: continue
-                addVariant(elements, apply)
+                val apply = part.get("apply")
+                if (apply is JSONObject) {
+                    addVariant(elements, apply)
+                } else if (apply is org.json.JSONArray) {
+                    // Arrays are random variants (bamboo picks 1x1..2x2) — take
+                    // the first so the stalk renders as a thin column.
+                    val first = apply.optJSONObject(0)
+                    if (first != null) addVariant(elements, first)
+                }
             }
             return ResolvedModel(elements)
         }
@@ -146,6 +155,28 @@ object ModelLoader {
         for (e in modelElements(modelPath)) {
             elements.add(transform(e, xRot, yRot))
         }
+    }
+
+    /** Variant fallback: pick the variant whose prop pairs are all satisfied by
+     *  [props] (most specific first). Handles world data with extra properties
+     *  the blockstates file doesn't know about (e.g. legacy signal_fire). */
+    private fun matchVariantSubset(variants: JSONObject, props: Map<String, String>): JSONObject? {
+        var best: JSONObject? = null
+        var bestCount = -1
+        val it = variants.keys()
+        while (it.hasNext()) {
+            val key = it.next()
+            if (key.isEmpty()) continue
+            val pairs = key.split(",").mapNotNull { p ->
+                val i = p.indexOf('=')
+                if (i > 0) p.substring(0, i) to p.substring(i + 1) else null
+            }
+            if (pairs.size > bestCount && pairs.all { (k, v) -> props[k] == v }) {
+                best = variants.optJSONObject(key)
+                bestCount = pairs.size
+            }
+        }
+        return best
     }
 
     /** Multipart "when" condition: AND of prop matches, or an OR array. */
