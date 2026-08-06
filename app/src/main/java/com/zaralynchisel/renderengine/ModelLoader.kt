@@ -237,12 +237,12 @@ object ModelLoader {
     private fun parseElement(e: JSONObject, textures: Map<String, String>): ModelElement? {
         val from = e.optJSONArray("from") ?: return null
         val to = e.optJSONArray("to") ?: return null
-        var x0 = from.optDouble(0, 0.0) / 16f
-        var y0 = from.optDouble(1, 0.0) / 16f
-        var z0 = from.optDouble(2, 0.0) / 16f
-        var x1 = to.optDouble(0, 16.0) / 16f
-        var y1 = to.optDouble(1, 16.0) / 16f
-        var z1 = to.optDouble(2, 16.0) / 16f
+        var x0 = from.optDouble(0, 0.0).toFloat() / 16f
+        var y0 = from.optDouble(1, 0.0).toFloat() / 16f
+        var z0 = from.optDouble(2, 0.0).toFloat() / 16f
+        var x1 = to.optDouble(0, 16.0).toFloat() / 16f
+        var y1 = to.optDouble(1, 16.0).toFloat() / 16f
+        var z1 = to.optDouble(2, 16.0).toFloat() / 16f
         // Element rotation (vanilla): rotate the 8 corners around the origin and
         // take the axis-aligned bounding box. 90° multiples keep exact integer
         // coords; 45° (campfire fire) is rendered unrotated — the two crossed
