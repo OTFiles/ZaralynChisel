@@ -47,3 +47,9 @@ app/src/main/assets/texture_cache/
 
 cache/
 tools/ziptest/
+
+# local state
+l.log
+u1l.log
+u2l.log
+.pi/tasks/
