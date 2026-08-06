@@ -1,0 +1,91 @@
+{
+  "nextId": 8,
+  "tasks": [
+    {
+      "id": "t1",
+      "content": "底层重建 UV 空间映射（atlas v 方向 + emitRect/emitCross/兜底 cube 统一）",
+      "description": "读 TextureAtlas 注册 flip 与 tileFor，对照 BlueMap 的 uv 处理，确定唯一正确的 '模型 uv → GL v' 映射；修复草方块侧面/火把/草上下颠倒（#7）与地毯拉伸（#3）",
+      "status": "pending",
+      "priority": "high",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1786016012774,
+      "updatedAt": 1786016012774
+    },
+    {
+      "id": "t2",
+      "content": "修复 emitModel winding（背面剔除）",
+      "description": "木头/原木显示下面和后面（#1）——模型路径面角点顺序与 emitRect 相反，导致 GL_BACK 剔除正面、背面朝外。对照 BlueMap 的 vertex order，统一为 CCW 朝外",
+      "status": "pending",
+      "priority": "high",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1786016012774,
+      "updatedAt": 1786016012774
+    },
+    {
+      "id": "t3",
+      "content": "渲染 pass 重构：opaque(写深度+discard)/blend，遮挡判定与 pass 拆分",
+      "description": "半透明排序问题（#4 活板门远近错层）：shader 加 alpha<0.05 discard，cutout 方块(植物/栅栏/火把/藤蔓/树叶)回 opaque pass 写深度；blend 白名单(水/染色玻璃/门/活板门/冰)。同时拆出 occludesNeighbour(id) 独立于 pass——楼梯/地毯/墙等镂空方块不遮挡邻居（#2 楼梯邻居缺面）",
+      "status": "pending",
+      "priority": "high",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1786016012774,
+      "updatedAt": 1786016012774
+    },
+    {
+      "id": "t4",
+      "content": "支持 element rotation（营火）",
+      "description": "ModelLoader parseElement 应用 rotation(axis/angle/origin) 旋转变换，45° 元素面标记非轴（双面、无 cull）——修营火拉伸（#5）",
+      "status": "pending",
+      "priority": "medium",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1786016012774,
+      "updatedAt": 1786016012774
+    },
+    {
+      "id": "t5",
+      "content": "未加载邻居不再镜像为实心（石头栅栏只渲染一个面 #8）",
+      "description": "chunk 边缘的墙/方块因镜像边列误判实心被 cull。改为未加载邻居 = 不遮挡（面渲染，无洞）",
+      "status": "pending",
+      "priority": "medium",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1786016012774,
+      "updatedAt": 1786016012774
+    },
+    {
+      "id": "t6",
+      "content": "查 jar 模型核实并修复细节：stairs faces/cullface、carpet、bamboo1_age0、wall、lantern",
+      "description": "stairs 上元素侧面 cullface 导致楼梯左右缺面（#2）；carpet 仅 top/bottom 面（#3 侧面拉伸）；bamboo1_age0 faces（#9 只渲染两个面）；wall_post/wall_side faces（#8）；灯笼子矩形 UV（#6）",
+      "status": "in_progress",
+      "priority": "medium",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1786016012774,
+      "updatedAt": 1786016014813,
+      "startedAt": 1786016014813
+    },
+    {
+      "id": "t7",
+      "content": "CI 验证并提交",
+      "description": "每个修复组一个 commit，Build APK + Lint Check 双绿后交付测试",
+      "status": "pending",
+      "priority": "high",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1786016012774,
+      "updatedAt": 1786016012774
+    }
+  ],
+  "idempotency": []
+}

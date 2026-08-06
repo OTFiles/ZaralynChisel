@@ -237,12 +237,55 @@ object ModelLoader {
     private fun parseElement(e: JSONObject, textures: Map<String, String>): ModelElement? {
         val from = e.optJSONArray("from") ?: return null
         val to = e.optJSONArray("to") ?: return null
-        val x0 = from.optDouble(0, 0.0).toFloat() / 16f
-        val y0 = from.optDouble(1, 0.0).toFloat() / 16f
-        val z0 = from.optDouble(2, 0.0).toFloat() / 16f
-        val x1 = to.optDouble(0, 16.0).toFloat() / 16f
-        val y1 = to.optDouble(1, 16.0).toFloat() / 16f
-        val z1 = to.optDouble(2, 16.0).toFloat() / 16f
+        var x0 = from.optDouble(0, 0.0) / 16f
+        var y0 = from.optDouble(1, 0.0) / 16f
+        var z0 = from.optDouble(2, 0.0) / 16f
+        var x1 = to.optDouble(0, 16.0) / 16f
+        var y1 = to.optDouble(1, 16.0) / 16f
+        var z1 = to.optDouble(2, 16.0) / 16f
+        // Element rotation (vanilla): rotate the 8 corners around the origin and
+        // take the axis-aligned bounding box. 90° multiples keep exact integer
+        // coords; 45° (campfire fire) is rendered unrotated — the two crossed
+        // thin panels still read as a fire cross.
+        val rot = e.optJSONObject("rotation")
+        if (rot != null) {
+            val angle = rot.optInt("angle", 0)
+            val axis = rot.optString("axis", "y")
+            if (angle % 90 == 0 && angle % 360 != 0) {
+                val or = rot.optJSONArray("origin")
+                val ox = or?.optDouble(0, 8.0) ?: 8.0
+                val oy = or?.optDouble(1, 8.0) ?: 8.0
+                val oz = or?.optDouble(2, 8.0) ?: 8.0
+                var minX = 16f; var minY = 16f; var minZ = 16f
+                var maxX = 0f; var maxY = 0f; var maxZ = 0f
+                for (cx in floatArrayOf(x0, x1)) for (cy in floatArrayOf(y0, y1)) for (cz in floatArrayOf(z0, z1)) {
+                    val dx = cx - ox; val dy = cy - oy; val dz = cz - oz
+                    var px = cx; var py = cy; var pz = cz
+                    when (axis) {
+                        "y" -> when (angle) {
+                            90 -> { px = (ox - dz).toFloat(); pz = (oz + dx).toFloat() }
+                            180 -> { px = (ox - dx).toFloat(); pz = (oz - dz).toFloat() }
+                            270 -> { px = (ox + dz).toFloat(); pz = (oz - dx).toFloat() }
+                        }
+                        "x" -> when (angle) {
+                            90 -> { py = (oy + dz).toFloat(); pz = (oz - dy).toFloat() }
+                            180 -> { py = (oy - dy).toFloat(); pz = (oz - dz).toFloat() }
+                            270 -> { py = (oy - dz).toFloat(); pz = (oz + dy).toFloat() }
+                        }
+                        "z" -> when (angle) {
+                            90 -> { px = (ox - dy).toFloat(); py = (oy + dx).toFloat() }
+                            180 -> { px = (ox - dx).toFloat(); py = (oy - dy).toFloat() }
+                            270 -> { px = (ox + dy).toFloat(); py = (oy - dx).toFloat() }
+                        }
+                    }
+                    if (px < minX) minX = px; if (px > maxX) maxX = px
+                    if (py < minY) minY = py; if (py > maxY) maxY = py
+                    if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz
+                }
+                x0 = minX; y0 = minY; z0 = minZ
+                x1 = maxX; y1 = maxY; z1 = maxZ
+            }
+        }
         val faces = ArrayList<ModelFace>()
         val facesObj = e.optJSONObject("faces")
         if (facesObj != null) {

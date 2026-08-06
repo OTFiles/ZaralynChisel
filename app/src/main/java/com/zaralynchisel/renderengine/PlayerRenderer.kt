@@ -435,6 +435,17 @@ class PlayerRenderer(
         val heights = data.heights
         val verts = ArrayList<Float>(2048)
         val transVerts = ArrayList<Float>(256)
+        // Translucent faces are collected per-face and sorted far→near against
+        // the camera, so a nearer translucent block blends correctly over a
+        // farther one INSIDE the same chunk (chunk-level sorting alone left
+        // e.g. a ceiling trapdoor painting over blocks below it).
+        val transFaces = ArrayList<Pair<Float, FloatArray>>(64)
+        fun faceDist(bx: Float, by: Float, bz: Float): Float {
+            val dx = bx + 0.5f - viewConfig.cameraX
+            val dy = by + 0.5f - viewConfig.cameraY
+            val dz = bz + 0.5f - viewConfig.cameraZ
+            return dx*dx + dy*dy + dz*dz
+        }
         val paths = LinkedHashSet<String>()
         val baseX = chunkX * 16
         val baseZ = chunkZ * 16
@@ -531,32 +542,35 @@ class PlayerRenderer(
                 if (p[axB] < minB) minB = p[axB]; if (p[axB] > maxB) maxB = p[axB]
             }
             val uv = atlas.uvOrigin(tile)
-            val u0 = uv[0]; val v0 = uv[1]
-            val target = if (trans) transVerts else verts
+            val tU0 = uv[0]; val tV0 = uv[1]
+            val face = FloatArray(72)
+            var o = 0
             val a = alpha
             for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
                 val p = c[k]
-                val u = if (maxA > minA) u0 + (p[axA]-minA)/(maxA-minA)*(u1-u0) else u0
-                // v along the vertical (y) axis is FLIPPED: vanilla uv v runs
-                // top→bottom while geometry y runs bottom→top. Without the flip,
-                // every sub-rectangle uv (stairs sides, bookshelves, lanterns…)
-                // rendered upside-down and looked stretched.
-                val t = if (maxB > minB) {
-                    if (axB == 1) v1 - (p[axB]-minB)/(maxB-minB)*(v1-v0)
-                    else v0 + (p[axB]-minB)/(maxB-minB)*(v1-v0)
-                } else v0
-                target.add(bx+p[0]); target.add(by+p[1]); target.add(bz+p[2])
-                target.add(nx); target.add(ny); target.add(nz)
-                target.add(u0 + u*TextureAtlas.TILE_UV); target.add(v0 + t*TextureAtlas.TILE_UV)
+                val tA = if (maxA > minA) (p[axA]-minA)/(maxA-minA) else 0f
+                val tB = if (maxB > minB) (p[axB]-minB)/(maxB-minB) else 0f
+                // UV mapping — the single source of truth for ALL geometry:
+                //  · u: low geometry end → u0, high end → u1.
+                //  · v: vanilla uv v runs TOP→BOTTOM on the texture while
+                //    geometry y (and z on top faces) runs the other way, so the
+                //    low end maps to v1 and the high end to v0.
+                //  · the atlas stores tiles VERTICALLY FLIPPED (GL v=0 = image
+                //    bottom), so GL v = tileV0 + (1 - vanillaV) * TILE_UV.
+                val u = u0 + tA*(u1-u0)
+                val v = v1 - tB*(v1-v0)
+                face[o++] = bx+p[0]; face[o++] = by+p[1]; face[o++] = bz+p[2]
+                face[o++] = nx; face[o++] = ny; face[o++] = nz
+                face[o++] = tU0 + u*TextureAtlas.TILE_UV; face[o++] = tV0 + (1f - v)*TextureAtlas.TILE_UV
                 val cc = when {
-                    // Grass-block side: only the top strip (t <= 0.25 after the v
-                    // flip) is grass-coloured.
-                    sideGrassStrip && ny == 0f && t <= 0.25f -> grassTint
+                    // Grass-block side: only the top strip (v <= 0.25) is tinted.
+                    sideGrassStrip && ny == 0f && v <= 0.25f -> grassTint
                     color != null -> color
                     else -> WHITE
                 }
-                target.add(cc[0]); target.add(cc[1]); target.add(cc[2]); target.add(a)
+                face[o++] = cc[0]; face[o++] = cc[1]; face[o++] = cc[2]; face[o++] = a
             }
+            if (trans) transFaces.add(faceDist(bx, by, bz) to face) else verts.addAll(face.asList())
         }
 
         /** Emit an axis-aligned box with per-face enable flags. All coords block-local 0..1. */
@@ -580,28 +594,30 @@ class PlayerRenderer(
         }
 
         /** Cross-model plants: two X-shaped double-sided quads (vanilla cross model). */
-        fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?) {
+        fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?, trans: Boolean) {
             val uv = atlas.uvOrigin(tile)
-            val u0 = uv[0]; val v0 = uv[1]
+            val tU0 = uv[0]; val tV0 = uv[1]
             for ((fi, face) in arrayOf(CROSS_1, CROSS_2).withIndex()) {
                 for (back in 0..1) {
                     val v = face.vertices
+                    val f = FloatArray(72)
+                    var o = 0
                     for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
                         val i = if (back == 0) k else 3 - k
                         val px = v[i*3]; val py = v[i*3+1]; val pz = v[i*3+2]
-                        transVerts.add(bx+px); transVerts.add(by+py); transVerts.add(bz+pz)
+                        f[o++] = bx+px; f[o++] = by+py; f[o++] = bz+pz
                         val n = if (back == 0) 1f else -1f
-                        transVerts.add(face.nx*n); transVerts.add(face.ny*n); transVerts.add(face.nz*n)
-                        // UV axes must be orthogonal in the quad plane: u runs along
-                        // the face's horizontal diagonal, v along y. Using (px,pz)
-                        // directly made u == v (both along the same diagonal), so the
-                        // whole quad sampled one diagonal line — the "stretched pixel".
+                        f[o++] = face.nx*n; f[o++] = face.ny*n; f[o++] = face.nz*n
+                        // u along the face's horizontal diagonal, v along y.
+                        // Atlas is flipped: py=1 (top) → GL v high end = texture
+                        // top, so v = tileV0 + py*TILE_UV.
                         val u = if (fi == 0) (px + pz) * 0.5f else (1f - px + pz) * 0.5f
-                        transVerts.add(u0 + u*TextureAtlas.TILE_UV); transVerts.add(v0 + (1f - py)*TextureAtlas.TILE_UV)
+                        f[o++] = tU0 + u*TextureAtlas.TILE_UV; f[o++] = tV0 + py*TextureAtlas.TILE_UV
                         val c = tint ?: WHITE
                         val a = c.getOrElse(3) { 1f }
-                        transVerts.add(c[0]); transVerts.add(c[1]); transVerts.add(c[2]); transVerts.add(a)
+                        f[o++] = c[0]; f[o++] = c[1]; f[o++] = c[2]; f[o++] = a
                     }
+                    if (trans) transFaces.add(faceDist(bx, by, bz) to f) else verts.addAll(f.asList())
                 }
             }
         }
@@ -696,8 +712,12 @@ class PlayerRenderer(
                     // BlueMap-style: the vanilla model wins when one exists. Water is
                     // handled specially below (its model is a plain cube).
                     val model = if (!isWater) ModelLoader.getModel(blockId, props) else null
-                    val trans = isWater || blockId.endsWith("_door") || blockId.endsWith("_trapdoor") ||
-                        isTranslucent(blockId) || (model != null && modelHasAlpha(model))
+                    // Pass classification: only true-blend blocks (water, stained
+                    // glass, doors…) go translucent. All other transparent blocks
+                    // are "cutout" and render in the opaque pass with alpha-discard
+                    // in the shader — they write depth and sort correctly against
+                    // solid geometry (no more far-behind-near painting).
+                    val trans = isBlend(blockId)
                     if (model != null && model.elements.isNotEmpty()) {
                         emitModel(bx, by, bz, model, blockId, biome, alpha, trans, solidAbove, x, z, y)
                         // All four sides buried → nothing below can be visible.
@@ -711,7 +731,7 @@ class PlayerRenderer(
                     if (blockId in CROSS_BLOCKS) {
                         val p = "minecraft:block/$blockId"
                         paths.add(p)
-                        emitCross(bx, by, bz, atlas.tileFor(p), crossTintOf(blockId, biome))
+                        emitCross(bx, by, bz, atlas.tileFor(p), crossTintOf(blockId, biome), trans)
                         y--
                         continue
                     }
@@ -904,7 +924,14 @@ class PlayerRenderer(
             }
         }
         val n = verts.size / 12
-        val tn = transVerts.size / 12
+        var tn = 0
+        if (transFaces.isNotEmpty()) {
+            transFaces.sortByDescending { it.first }
+            for ((_, face) in transFaces) {
+                for (fl in face) transVerts.add(fl)
+            }
+            tn = transVerts.size / 12
+        }
         if (meshLogCount.incrementAndGet() <= 30) {
             val surf = heights.sumOf { row -> row.count { it != Int.MIN_VALUE } }
             Logger.d("mesh($chunkX,$chunkZ): surface=$surf/256 verts=$n trans=$tn paths=${paths.size}")
@@ -916,36 +943,45 @@ class PlayerRenderer(
         )
     }
 
-    /** Blocks whose textures have transparent pixels: must draw in the translucent
-     *  pass (otherwise the alpha=0 pixels render black). Covers all cross plants
-     *  plus the common cutout families. */
-    private fun isTranslucent(id: String): Boolean =
+    /** True-blend blocks: drawn in the translucent pass (alpha blending, no
+     *  depth write, far→near per-face sorting). Water, stained glass, doors,
+     *  trapdoors and ice genuinely mix with what is behind them. */
+    private fun isBlend(id: String): Boolean =
+        id == "water" || id.contains("stained_glass") || id == "tinted_glass" ||
+        id.endsWith("_door") || id.endsWith("_trapdoor") ||
+        id == "ice" || id == "frosted_ice" || id == "packed_ice" || id == "blue_ice" ||
+        id.contains("portal") || id == "beacon" || id == "slime_block" || id == "honey_block"
+
+    /** Cutout blocks (vanilla "cutout" render type): transparent PIXELS but
+     *  opaque blocks — plants, fences, glass panes, rails, torches, leaves…
+     *  They render in the opaque pass with alpha-discard, so they write depth
+     *  and sort correctly against solid geometry. */
+    private fun isCutout(id: String): Boolean =
         id in CROSS_BLOCKS || id.contains("glass") || id.contains("pane") ||
         id.contains("leaves") || id == "azalea" || id == "flowering_azalea" ||
         id == "mangrove_roots" || id == "moss_carpet" || id == "vine" ||
-        id == "ice" || id == "frosted_ice" || id == "chain" || id == "vine" ||
-        id == "lily_pad" || id == "cactus" || id == "ladder" || id == "lever" ||
+        id == "lily_pad" || id.contains("torch") || id.contains("lantern") ||
+        id.contains("campfire") || id.contains("rail") || id.contains("sign") ||
+        id.contains("chain") || id.contains("sapling") || id.contains("mushroom") ||
+        id.contains("flower") || id.contains("crop") ||
+        id == "tall_grass" || id == "short_grass" || id == "fern" || id == "large_fern" ||
+        id.contains("_stem") || id == "cactus" || id == "ladder" || id == "lever" ||
         id == "cobweb" || id == "scaffolding" || id == "flower_pot" ||
         id == "kelp" || id == "seagrass" || id == "tall_seagrass" ||
-        id.contains("torch") || id.contains("lantern") || id.contains("campfire") ||
-        id.contains("candle") || id.contains("rail") || id.contains("sign") ||
-        id.contains("fungus") || id.contains("roots") || id.contains("sapling") ||
-        id == "nether_sprouts" || id == "mangrove_propagule" || id == "moss_carpet" ||
-        id == "spore_blossom" || id == "glow_lichen" || id == "hanging_roots" ||
-        id == "pointed_dripstone" || id == "amethyst_cluster" ||
-        id.endsWith("_bud") || id.endsWith("_coral") || id == "bubble_column" ||
-        id.endsWith("_button") || id.endsWith("_pressure_plate") || id.endsWith("_fence") ||
-        id.endsWith("_fence_gate")
+        id.contains("fungus") || id.contains("roots") || id == "nether_sprouts" ||
+        id == "mangrove_propagule" || id == "spore_blossom" || id == "glow_lichen" ||
+        id == "hanging_roots" || id == "pointed_dripstone" || id == "amethyst_cluster" ||
+        id == "bamboo" || id == "sugar_cane" || id == "bubble_column" ||
+        id.endsWith("_bud") || id.endsWith("_coral") ||
+        id.endsWith("_button") || id.endsWith("_pressure_plate") ||
+        id.endsWith("_fence") || id.endsWith("_fence_gate") || id.endsWith("_wall") ||
+        id.contains("candle") || id.contains("carpet") || id.contains("snow")
 
-    /** True when any texture referenced by [model] has transparent pixels. */
-    private fun modelHasAlpha(model: ModelLoader.ResolvedModel): Boolean {
-        for (el in model.elements) {
-            for (f in el.faces) {
-                if (atlas.hasAlpha(f.texPath)) return true
-            }
-        }
-        return false
-    }
+    /** Hollow/translucent blocks never occlude neighbours (solidAt): fences,
+     *  leaves, glass, plants, stairs (their missing quarter must not hide the
+     *  neighbour's faces), thin stems… */
+    private fun isTranslucent(id: String): Boolean =
+        isCutout(id) || isBlend(id) || id.endsWith("_stairs")
 
     private fun grassTintOf(biome: String?): FloatArray = BiomeColors.toFloatRgba(BiomeColors.grassColor(biome), 1f)
 
@@ -1119,6 +1155,10 @@ class PlayerRenderer(
             out vec4 fragColor;
             void main() {
                 vec4 tex = texture(uTex, vUV);
+                // Cutout blocks (plants, fences, glass…) live in the opaque pass;
+                // their fully-transparent pixels must be discarded, not blended,
+                // so they still write depth and sort correctly.
+                if (tex.a < 0.05) discard;
                 vec3 normal = normalize(vNormal);
                 vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                 float diff = max(dot(normal, lightDir), 0.0);
