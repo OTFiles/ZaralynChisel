@@ -24,7 +24,8 @@ object ModelLoader {
         val u0: Float, val v0: Float, val u1: Float, val v1: Float,
         val texPath: String,
         val cullDir: Int,        // -1 = no cullface
-        val tint: Int            // -1 = no tint
+        val tint: Int,           // -1 = no tint
+        val rot: Int = 0         // face uv rotation in 90° steps (corner permutation)
     )
 
     class ModelElement(
@@ -303,26 +304,29 @@ object ModelLoader {
                     u1 = uvArr.optDouble(2, 16.0).toFloat() / 16f
                     v1 = uvArr.optDouble(3, 16.0).toFloat() / 16f
                 } else {
-                    // Default uv = the face's own rect (v runs top→bottom).
+                    // Vanilla default uv per face (verified against BlueMap):
+                    // up has v=z (unflipped), down v=16-z, north u=16-x,
+                    // south u=x, west u=z, east u=16-z. emitModel converts
+                    // these to the renderer's uniform uv mapping per direction.
                     when (dir) {
-                        0, 1 -> { u0 = x0; v0 = 1f - z1; u1 = x1; v1 = 1f - z0 }
-                        2, 3 -> { u0 = x0; v0 = 1f - y1; u1 = x1; v1 = 1f - y0 }
-                        else -> { u0 = z0; v0 = 1f - y1; u1 = z1; v1 = 1f - y0 }
+                        0 -> { u0 = x0; v0 = 1f - z1; u1 = x1; v1 = 1f - z0 }
+                        1 -> { u0 = x0; v0 = z0; u1 = x1; v1 = z1 }
+                        2 -> { u0 = 1f - x1; v0 = 1f - y1; u1 = 1f - x0; v1 = 1f - y0 }
+                        3 -> { u0 = x0; v0 = 1f - y1; u1 = x1; v1 = 1f - y0 }
+                        4 -> { u0 = z0; v0 = 1f - y1; u1 = z1; v1 = 1f - y0 }
+                        else -> { u0 = 1f - z1; v0 = 1f - y1; u1 = 1f - z0; v1 = 1f - y0 }
                     }
                 }
-                // UV rotation (clockwise): rotate the whole uv rectangle.
-                when (f.optInt("rotation", 0)) {
-                    90 -> { val nu0 = 1f - v1; val nv0 = u0; val nu1 = 1f - v0; val nv1 = u1
-                            u0 = nu0; v0 = nv0; u1 = nu1; v1 = nv1 }
-                    180 -> { val nu0 = 1f - u1; val nv0 = 1f - v1; val nu1 = 1f - u0; val nv1 = 1f - v0
-                             u0 = nu0; v0 = nv0; u1 = nu1; v1 = nv1 }
-                    270 -> { val nu0 = v0; val nv0 = 1f - u1; val nu1 = v1; val nv1 = 1f - u0
-                             u0 = nu0; v0 = nv0; u1 = nu1; v1 = nv1 }
-                }
+                // Face uv "rotation" is a CORNER PERMUTATION (which face corner
+                // shows which texture corner — used by horizontal logs, doors,
+                // fence sides…), not a rotation of the rectangle. Rotating the
+                // rect would be a no-op for full-tile uvs. Carried as steps and
+                // applied per corner at emission.
+                val rotSteps = (((f.optInt("rotation", 0) / 90) % 4) + 4) % 4
                 val cullName = f.optString("cullface", "")
                 val cullDir = DIR_IDS[cullName] ?: -1
                 val tint = if (f.has("tintindex")) f.optInt("tintindex", -1) else -1
-                faces.add(ModelFace(dir, u0, v0, u1, v1, texPath, cullDir, tint))
+                faces.add(ModelFace(dir, u0, v0, u1, v1, texPath, cullDir, tint, rotSteps))
             }
         }
         return ModelElement(x0, y0, z0, x1, y1, z1, faces)
@@ -353,36 +357,43 @@ object ModelLoader {
             270 -> { val ny0 = fz0; val ny1 = fz1; val nz0 = 16f - fy1; val nz1 = 16f - fy0
                      fy0 = ny0; fy1 = ny1; fz0 = nz0; fz1 = nz1 }
         }
+        // Vanilla y rotation direction (verified against oak_stairs: facing=south
+        // is y=90 and must move the tall east half to the south half):
+        // y=90 rotates by -90° about y (x'=16-z, z'=x), y=270 by +90°.
+        // The previous code had 90/270 swapped, mirroring every y-rotated
+        // variant (furnace/pumpkin facing, stairs facing south/north…).
         when (yRot) {
-            90 -> { val nx0 = fz0; val nx1 = fz1; val nz0 = 16f - fx1; val nz1 = 16f - fx0
+            90 -> { val nx0 = 16f - fz1; val nx1 = 16f - fz0; val nz0 = fx0; val nz1 = fx1
                     fx0 = nx0; fx1 = nx1; fz0 = nz0; fz1 = nz1 }
             180 -> { val nx0 = 16f - fx1; val nx1 = 16f - fx0; val nz0 = 16f - fz1; val nz1 = 16f - fz0
                      fx0 = nx0; fx1 = nx1; fz0 = nz0; fz1 = nz1 }
-            270 -> { val nx0 = 16f - fz1; val nx1 = 16f - fz0; val nz0 = fx0; val nz1 = fx1
+            270 -> { val nx0 = fz0; val nx1 = fz1; val nz0 = 16f - fx1; val nz1 = 16f - fx0
                      fx0 = nx0; fx1 = nx1; fz0 = nz0; fz1 = nz1 }
         }
         var dirMap = intArrayOf(0, 1, 2, 3, 4, 5)
+        // x=90 rotates by -90° about x (y'=16-z, z'=y — matches the box code
+        // above): up→north, down→south, north→down, south→up. x=270 inversely.
         if (xRot != 0) {
             dirMap = when (xRot) {
-                90 -> intArrayOf(2, 3, 0, 1, 4, 5)
+                90 -> intArrayOf(3, 2, 0, 1, 4, 5)
                 180 -> intArrayOf(1, 0, 3, 2, 4, 5)
-                else -> intArrayOf(3, 2, 1, 0, 4, 5)
+                else -> intArrayOf(2, 3, 1, 0, 4, 5)
             }
         }
         if (yRot != 0) {
             val d = dirMap
             dirMap = IntArray(6)
             for (i in 0..5) dirMap[i] = when (yRot) {
-                90 -> when (d[i]) { 2 -> 4; 3 -> 5; 4 -> 3; 5 -> 2; else -> d[i] }
+                90 -> when (d[i]) { 2 -> 5; 3 -> 4; 4 -> 2; 5 -> 3; else -> d[i] }
                 180 -> when (d[i]) { 2 -> 3; 3 -> 2; 4 -> 5; 5 -> 4; else -> d[i] }
-                else -> when (d[i]) { 2 -> 5; 3 -> 4; 4 -> 2; 5 -> 3; else -> d[i] }
+                else -> when (d[i]) { 2 -> 4; 3 -> 5; 4 -> 3; 5 -> 2; else -> d[i] }
             }
         }
         val faces = ArrayList<ModelFace>(e.faces.size)
         for (f in e.faces) {
             faces.add(ModelFace(
                 dirMap[f.dir], f.u0, f.v0, f.u1, f.v1, f.texPath,
-                if (f.cullDir >= 0) dirMap[f.cullDir] else -1, f.tint
+                if (f.cullDir >= 0) dirMap[f.cullDir] else -1, f.tint, f.rot
             ))
         }
         return ModelElement(fx0 / 16f, fy0 / 16f, fz0 / 16f, fx1 / 16f, fy1 / 16f, fz1 / 16f, faces)

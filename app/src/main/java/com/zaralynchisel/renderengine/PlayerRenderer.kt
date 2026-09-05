@@ -126,9 +126,13 @@ class PlayerRenderer(
             // where IEEE floats have the most mantissa density, so distant
             // geometry keeps far better depth separation than the classic
             // near→0 mapping (matters once the view distance grows).
-            GLES30.glDepthRangef(1f, 0f)
+            GLES30.glDepthRangef(0f, 1f) // standard range; the reversal is in the matrix
             GLES30.glDepthFunc(GLES30.GL_GREATER)
             GLES30.glClearDepthf(0f)
+            // The reversed-Z projection mirrors NDC (z flipped), so triangles
+            // that were CCW in model space become CW in NDC — declare CW the
+            // front face to keep back-face culling behaviour.
+            GLES30.glFrontFace(GLES30.GL_CW)
             shaderProgram = createProgram(TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER)
             glReady = shaderProgram != 0
             atlas.uploadPending() // create + upload the missing-texture layer
@@ -163,12 +167,21 @@ class PlayerRenderer(
         val left = bottom * aspect
         val right = top * aspect
         android.opengl.Matrix.frustumM(projectionMatrix, 0, left, right, bottom, top, near, far)
+        // Reversed-Z baked into the PROJECTION MATRIX itself: flip the z row so
+        // near→NDC +1 and far→NDC -1. Depth then increases with closeness and
+        // GL_GREATER + clear 0 keep far→near ordering. This no longer relies on
+        // glDepthRangef(1,0), which several drivers clamp back to 0..1 — on such
+        // devices the old setup made FAR fragments (depth≈1) pass over NEAR ones
+        // (depth≈0) and every block showed its back faces.
+        projectionMatrix[10] = -projectionMatrix[10]
+        projectionMatrix[14] = -projectionMatrix[14]
     }
 
     override fun onDrawFrame(gl: GL10?) {
         try {
-            // Reversed-Z depth state is GL state that must survive per frame.
-            GLES30.glDepthRangef(1f, 0f)
+            // Reversed-Z depth state is GL state that must survive per frame
+            // (the reversal lives in the projection matrix, see recomputeProjection).
+            GLES30.glDepthRangef(0f, 1f)
             GLES30.glClearDepthf(0f)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
             // Camera sanity: NaN coordinates would collapse the chunk set to
@@ -507,7 +520,8 @@ class PlayerRenderer(
             tile: Int, color: FloatArray?, alpha: Float,
             u0: Float = 0f, v0: Float = 0f, u1: Float = 1f, v1: Float = 1f,
             sideGrassStrip: Boolean = false,
-            trans: Boolean = false
+            trans: Boolean = false,
+            uvRot: Int = 0
         ) {
             val c = arrayOf(
                 floatArrayOf(x0, y0, z0), floatArrayOf(x1, y0, z0),
@@ -548,8 +562,18 @@ class PlayerRenderer(
             val a = alpha
             for (k in intArrayOf(0, 1, 2, 0, 2, 3)) {
                 val p = c[k]
-                val tA = if (maxA > minA) (p[axA]-minA)/(maxA-minA) else 0f
-                val tB = if (maxB > minB) (p[axB]-minB)/(maxB-minB) else 0f
+                val ta = if (maxA > minA) (p[axA]-minA)/(maxA-minA) else 0f
+                val tb = if (maxB > minB) (p[axB]-minB)/(maxB-minB) else 0f
+                // Face uv rotation permutes which texture corner each face
+                // corner shows; in this uniform mapping that is a rotation of
+                // the in-plane position (1 = 90° CCW, 2 = 180°, 3 = 270°).
+                val tA: Float; val tB: Float
+                when (uvRot) {
+                    1 -> { tA = 1f - tb; tB = ta }
+                    2 -> { tA = 1f - ta; tB = 1f - tb }
+                    3 -> { tA = tb; tB = 1f - ta }
+                    else -> { tA = ta; tB = tb }
+                }
                 // UV mapping — the single source of truth for ALL geometry:
                 //  · u: low geometry end → u0, high end → u1.
                 //  · v: vanilla uv v runs TOP→BOTTOM on the texture while
@@ -664,12 +688,26 @@ class PlayerRenderer(
                     paths.add(f.texPath)
                     val tile = atlas.tileFor(f.texPath)
                     val tint = if (f.tint >= 0) familyTint else null
+                    // Model uv rects are in VANILLA semantics, where each face
+                    // direction maps corners differently (up: v=z, north:
+                    // u=16-x, east: u=16-z — BlueMap-verified). emitRect uses
+                    // one uniform mapping (u along the in-plane axis, v
+                    // flipped), so swap the rect axes for those directions.
+                    var ru0 = f.u0; var rv0 = f.v0; var ru1 = f.u1; var rv1 = f.v1
+                    when (f.dir) {
+                        1 -> { val t = rv0; rv0 = rv1; rv1 = t }
+                        2, 5 -> { val t = ru0; ru0 = ru1; ru1 = t }
+                    }
+                    // Corner-permutation uv rotation runs along each direction's
+                    // canonical corner order; up/north/east run the opposite way
+                    // in the uniform mapping, so reverse their rotation steps.
+                    val uvRot = if (f.dir == 1 || f.dir == 2 || f.dir == 5) (4 - f.rot) % 4 else f.rot
                     emitRect(bx, by, bz, nx, ny, nz, el.x0, el.y0, el.z0, el.x1, el.y1, el.z1,
-                        tile, tint, alpha, f.u0, f.v0, f.u1, f.v1, trans = trans)
+                        tile, tint, alpha, ru0, rv0, ru1, rv1, trans = trans, uvRot = uvRot)
                     if (f.cullDir < 0) {
                         // No cullface: visible from both sides (cross plants, thin panels).
                         emitRect(bx, by, bz, -nx, -ny, -nz, el.x0, el.y0, el.z0, el.x1, el.y1, el.z1,
-                            tile, tint, alpha, f.u0, f.v0, f.u1, f.v1, trans = trans)
+                            tile, tint, alpha, ru0, rv0, ru1, rv1, trans = trans, uvRot = uvRot)
                     }
                 }
             }
@@ -798,15 +836,18 @@ class PlayerRenderer(
                             // (back = away from the facing direction).
                             val facing = props["facing"] ?: "north"
                             // back = filled half (away from facing); front = step top.
+                            // The tall half is on the FACING side (vanilla:
+                            // facing=east base model has its upper element on
+                            // x=8..16). north/south were inverted before.
                             val (bx0, bz0, bx1, bz1) = when (facing) {
-                                "north" -> floatArrayOf(0f, 0.5f, 1f, 1f)   // south half
-                                "south" -> floatArrayOf(0f, 0f, 1f, 0.5f)   // north half
-                                "west" -> floatArrayOf(0f, 0f, 0.5f, 1f)    // west half
-                                else -> floatArrayOf(0.5f, 0f, 1f, 1f)      // east half
+                                "north" -> floatArrayOf(0f, 0f, 1f, 0.5f)    // north half
+                                "south" -> floatArrayOf(0f, 0.5f, 1f, 1f)    // south half
+                                "west" -> floatArrayOf(0f, 0f, 0.5f, 1f)     // west half
+                                else -> floatArrayOf(0.5f, 0f, 1f, 1f)       // east half
                             }
                             val (fx0, fz0, fx1, fz1) = when (facing) {
-                                "north" -> floatArrayOf(0f, 0f, 1f, 0.5f)
-                                "south" -> floatArrayOf(0f, 0.5f, 1f, 1f)
+                                "north" -> floatArrayOf(0f, 0.5f, 1f, 1f)
+                                "south" -> floatArrayOf(0f, 0f, 1f, 0.5f)
                                 "west" -> floatArrayOf(0.5f, 0f, 1f, 1f)
                                 else -> floatArrayOf(0f, 0f, 0.5f, 1f)
                             }
@@ -975,7 +1016,7 @@ class PlayerRenderer(
         id.endsWith("_bud") || id.endsWith("_coral") ||
         id.endsWith("_button") || id.endsWith("_pressure_plate") ||
         id.endsWith("_fence") || id.endsWith("_fence_gate") || id.endsWith("_wall") ||
-        id.contains("candle") || id.contains("carpet") || id.contains("snow")
+        id.contains("candle") || id.contains("carpet") || id == "snow"
 
     /** Hollow/translucent blocks never occlude neighbours (solidAt): fences,
      *  leaves, glass, plants, stairs (their missing quarter must not hide the
