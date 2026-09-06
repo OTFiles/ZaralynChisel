@@ -103,6 +103,11 @@ class PlayerRenderer(
     private val atlas = TextureAtlas()
 
     private var shaderProgram = 0
+    private var cutoutProgram = 0
+    private var vpLoc = 0
+    private var texLoc = 0
+    private var cutVpLoc = 0
+    private var cutTexLoc = 0
     private val projectionMatrix = FloatArray(16)
     private val viewMatrix = FloatArray(16)
     private val vpMatrix = FloatArray(16)
@@ -129,12 +134,21 @@ class PlayerRenderer(
             GLES30.glDepthRangef(0f, 1f) // standard range; the reversal is in the matrix
             GLES30.glDepthFunc(GLES30.GL_GREATER)
             GLES30.glClearDepthf(0f)
-            // The reversed-Z projection mirrors NDC (z flipped), so triangles
-            // that were CCW in model space become CW in NDC — declare CW the
-            // front face to keep back-face culling behaviour.
-            GLES30.glFrontFace(GLES30.GL_CW)
+            // NOTE: no glFrontFace here. Front/back-face winding is judged in
+            // WINDOW coordinates (x,y); the reversed-Z projection only flips the
+            // z row, so winding is unchanged and the default CCW stays correct.
+            // A glFrontFace(GL_CW) added earlier flipped every face's culling —
+            // blocks rendered their three FAR faces (the face-flip symptom
+            // previously blamed on depth).
             shaderProgram = createProgram(TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER)
-            glReady = shaderProgram != 0
+            cutoutProgram = createProgram(TERRAIN_VERTEX_SHADER, CUTOUT_FRAGMENT_SHADER)
+            glReady = shaderProgram != 0 && cutoutProgram != 0
+            if (glReady) {
+                vpLoc = GLES30.glGetUniformLocation(shaderProgram, "uVP")
+                texLoc = GLES30.glGetUniformLocation(shaderProgram, "uTex")
+                cutVpLoc = GLES30.glGetUniformLocation(cutoutProgram, "uVP")
+                cutTexLoc = GLES30.glGetUniformLocation(cutoutProgram, "uTex")
+            }
             atlas.uploadPending() // create + upload the missing-texture layer
             // Chunk loading is driven by onDrawFrame's ensureChunksAround() using the
             // current camera, so it always loads around the (spawn-updated) position.
@@ -213,17 +227,27 @@ class PlayerRenderer(
             uploadPending()
             ensureChunksAround()
 
+            // Opaque pass: discard-free shader keeps early-Z on for the bulk.
             GLES30.glUseProgram(shaderProgram)
-            val vpLoc = GLES30.glGetUniformLocation(shaderProgram, "uVP")
             GLES30.glUniformMatrix4fv(vpLoc, 1, false, vpMatrix, 0)
             atlas.bind()
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(shaderProgram, "uTex"), 0)
-
-            for ((key, handles) in meshes) {
-                drawMesh(key, handles, translucent = false)
+            GLES30.glUniform1i(texLoc, 0)
+            for ((_, handles) in meshes) {
+                drawMesh(handles, 0, 1)
+            }
+            // Cutout pass (plants, fences, glass panes, doors…): alpha-discard
+            // shader, still writes depth so it sorts correctly with solids.
+            GLES30.glUseProgram(cutoutProgram)
+            GLES30.glUniformMatrix4fv(cutVpLoc, 1, false, vpMatrix, 0)
+            GLES30.glUniform1i(cutTexLoc, 0)
+            for ((_, handles) in meshes) {
+                drawMesh(handles, 6, 7)
             }
             // Translucent pass: alpha blend, no depth write, far chunks first so
-            // nearer water/glass/plants blend correctly over farther ones.
+            // nearer water/stained glass blends correctly over farther ones.
+            GLES30.glUseProgram(shaderProgram)
+            GLES30.glUniformMatrix4fv(vpLoc, 1, false, vpMatrix, 0)
+            GLES30.glUniform1i(texLoc, 0)
             GLES30.glEnable(GLES30.GL_BLEND)
             GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
             GLES30.glDepthMask(false)
@@ -236,8 +260,8 @@ class PlayerRenderer(
                     val cz = (entry.key.toInt()) * 16 + 8 - camZ
                     cx * cx + cz * cz
                 }
-            for ((key, handles) in trans) {
-                drawMesh(key, handles, translucent = true)
+            for ((_, handles) in trans) {
+                drawMesh(handles, 3, 4)
             }
             GLES30.glDepthMask(true)
             GLES30.glDisable(GLES30.GL_BLEND)
@@ -246,10 +270,10 @@ class PlayerRenderer(
         }
     }
 
-    private fun drawMesh(key: Long, handles: IntArray, translucent: Boolean) {
-        val vao = if (translucent) handles[3] else handles[0]
-        val vertexCount = if (translucent) handles[4] else handles[1]
-        if (vertexCount == 0) return
+    private fun drawMesh(handles: IntArray, vaoIdx: Int, countIdx: Int) {
+        val vao = handles[vaoIdx]
+        val vertexCount = handles[countIdx]
+        if (vertexCount == 0 || vao == 0) return
         GLES30.glBindVertexArray(vao)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, vertexCount)
         GLES30.glBindVertexArray(0)
@@ -286,7 +310,22 @@ class PlayerRenderer(
                 GLES30.glBindVertexArray(0)
                 tcount = mesh.transCount
             }
-            meshes[key] = intArrayOf(vao[0], mesh.vertexCount, vbo[0], tvao, tcount, tvbo)
+            // Cutout geometry (plants, fences, glass panes, doors…) gets its own
+            // VAO/VBO too — it draws in a separate discard pass.
+            var cvao = 0
+            var cvbo = 0
+            var ccount = 0
+            val cbuf = mesh.cutBuffer
+            if (cbuf != null && mesh.cutCount > 0) {
+                cvao = IntArray(1).also { GLES30.glGenVertexArrays(1, it, 0) }[0]
+                cvbo = IntArray(1).also { GLES30.glGenBuffers(1, it, 0) }[0]
+                uploadBuffer(cvbo, cbuf)
+                GLES30.glBindVertexArray(cvao)
+                setupAttribs()
+                GLES30.glBindVertexArray(0)
+                ccount = mesh.cutCount
+            }
+            meshes[key] = intArrayOf(vao[0], mesh.vertexCount, vbo[0], tvao, tcount, tvbo, cvao, ccount, cvbo)
         }
     }
 
@@ -332,8 +371,19 @@ class PlayerRenderer(
                 }
             }
         }
-        // Drop chunks no longer needed.
-        val drop = meshes.keys.filter { it !in desired }
+        // Drop chunks no longer needed — with hysteresis: only chunks beyond
+        // renderDistance+2 are dropped. Dropping the moment a chunk leaves the
+        // load circle caused drop→reload→rebuild storms while panning along a
+        // border (rebuilding every chunk over and over — a large part of the
+        // "renders too slowly" reports).
+        val dropSq = (rd + 2) * (rd + 2)
+        val drop = meshes.keys.filter { key ->
+            val mx = (key shr 32).toInt()
+            val mz = key.toInt()
+            val dx = mx - cx
+            val dz = mz - cz
+            dx * dx + dz * dz > dropSq
+        }
         if (drop.isNotEmpty()) {
             Logger.d("ensureChunksAround: dropping ${drop.size} chunks (cx=$cx,cz=$cz, cam=${viewConfig.cameraX},${viewConfig.cameraZ})")
         }
@@ -348,12 +398,18 @@ class PlayerRenderer(
             if (handles.size >= 6 && handles[5] != 0) {
                 GLES30.glDeleteBuffers(1, intArrayOf(handles[5]), 0) // translucent vbo
             }
+            if (handles.size >= 9 && handles[8] != 0) {
+                GLES30.glDeleteBuffers(1, intArrayOf(handles[8]), 0) // cutout vbo
+            }
             if (handles.size >= 3) {
                 GLES30.glDeleteBuffers(1, intArrayOf(handles[2]), 0) // vbo
             }
             GLES30.glDeleteVertexArrays(1, intArrayOf(handles[0]), 0)
             if (handles.size >= 4 && handles[3] != 0) {
                 GLES30.glDeleteVertexArrays(1, intArrayOf(handles[3]), 0)
+            }
+            if (handles.size >= 7 && handles[6] != 0) {
+                GLES30.glDeleteVertexArrays(1, intArrayOf(handles[6]), 0)
             }
         } catch (_: Exception) { }
     }
@@ -448,6 +504,9 @@ class PlayerRenderer(
         val heights = data.heights
         val verts = ArrayList<Float>(2048)
         val transVerts = ArrayList<Float>(256)
+        // Cutout geometry (plants, fences, glass panes, doors…) — separate
+        // buffer for the discard pass, so the opaque bulk keeps early-Z.
+        val cutVerts = ArrayList<Float>(512)
         // Translucent faces are collected per-face and sorted far→near against
         // the camera, so a nearer translucent block blends correctly over a
         // farther one INSIDE the same chunk (chunk-level sorting alone left
@@ -521,7 +580,8 @@ class PlayerRenderer(
             u0: Float = 0f, v0: Float = 0f, u1: Float = 1f, v1: Float = 1f,
             sideGrassStrip: Boolean = false,
             trans: Boolean = false,
-            uvRot: Int = 0
+            uvRot: Int = 0,
+            cutout: Boolean = false
         ) {
             val c = arrayOf(
                 floatArrayOf(x0, y0, z0), floatArrayOf(x1, y0, z0),
@@ -594,7 +654,11 @@ class PlayerRenderer(
                 }
                 face[o++] = cc[0]; face[o++] = cc[1]; face[o++] = cc[2]; face[o++] = a
             }
-            if (trans) transFaces.add(faceDist(bx, by, bz) to face) else verts.addAll(face.asList())
+            when {
+                trans -> transFaces.add(faceDist(bx, by, bz) to face)
+                cutout -> cutVerts.addAll(face.asList())
+                else -> verts.addAll(face.asList())
+            }
         }
 
         /** Emit an axis-aligned box with per-face enable flags. All coords block-local 0..1. */
@@ -607,18 +671,21 @@ class PlayerRenderer(
             north: Boolean, south: Boolean, east: Boolean, west: Boolean,
             sideGrass: Boolean = false,
             trans: Boolean = false,
-            topTile: Int = tile
+            topTile: Int = tile,
+            cutout: Boolean = false
         ) {
-            if (top) emitRect(bx,by,bz, 0f,1f,0f, x0,y1,z0, x1,y1,z1, topTile, color, alpha, trans = trans)
-            if (bottom) emitRect(bx,by,bz, 0f,-1f,0f, x0,y0,z0, x1,y0,z1, tile, color, alpha, trans = trans)
-            if (north) emitRect(bx,by,bz, 0f,0f,-1f, x0,y0,z0, x1,y1,z0, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans)
-            if (south) emitRect(bx,by,bz, 0f,0f,1f, x0,y0,z1, x1,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans)
-            if (west) emitRect(bx,by,bz, -1f,0f,0f, x0,y0,z0, x0,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans)
-            if (east) emitRect(bx,by,bz, 1f,0f,0f, x1,y0,z0, x1,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans)
+            if (top) emitRect(bx,by,bz, 0f,1f,0f, x0,y1,z0, x1,y1,z1, topTile, color, alpha, trans = trans, cutout = cutout)
+            if (bottom) emitRect(bx,by,bz, 0f,-1f,0f, x0,y0,z0, x1,y0,z1, tile, color, alpha, trans = trans, cutout = cutout)
+            if (north) emitRect(bx,by,bz, 0f,0f,-1f, x0,y0,z0, x1,y1,z0, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans, cutout = cutout)
+            if (south) emitRect(bx,by,bz, 0f,0f,1f, x0,y0,z1, x1,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans, cutout = cutout)
+            if (west) emitRect(bx,by,bz, -1f,0f,0f, x0,y0,z0, x0,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans, cutout = cutout)
+            if (east) emitRect(bx,by,bz, 1f,0f,0f, x1,y0,z0, x1,y1,z1, tile, color, alpha, sideGrassStrip = sideGrass, trans = trans, cutout = cutout)
         }
 
-        /** Cross-model plants: two X-shaped double-sided quads (vanilla cross model). */
-        fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?, trans: Boolean) {
+        /** Cross-model plants: two X-shaped double-sided quads (vanilla cross
+         *  model). Always cutout — plant textures have transparent pixels but
+         *  the blocks are opaque. */
+        fun emitCross(bx: Float, by: Float, bz: Float, tile: Int, tint: FloatArray?) {
             val uv = atlas.uvOrigin(tile)
             val tU0 = uv[0]; val tV0 = uv[1]
             for ((fi, face) in arrayOf(CROSS_1, CROSS_2).withIndex()) {
@@ -641,7 +708,7 @@ class PlayerRenderer(
                         val a = c.getOrElse(3) { 1f }
                         f[o++] = c[0]; f[o++] = c[1]; f[o++] = c[2]; f[o++] = a
                     }
-                    if (trans) transFaces.add(faceDist(bx, by, bz) to f) else verts.addAll(f.asList())
+                    cutVerts.addAll(f.asList())
                 }
             }
         }
@@ -652,7 +719,8 @@ class PlayerRenderer(
             model: ModelLoader.ResolvedModel,
             blockId: String, biome: String?,
             alpha: Float, trans: Boolean, solidAbove: Boolean,
-            x: Int, z: Int, y: Int
+            x: Int, z: Int, y: Int,
+            cutout: Boolean
         ) {
             // Tint colour by block family; applied ONLY to faces whose model
             // declares tintindex (grass top, leaves, plants… — vanilla behaviour).
@@ -703,11 +771,11 @@ class PlayerRenderer(
                     // in the uniform mapping, so reverse their rotation steps.
                     val uvRot = if (f.dir == 1 || f.dir == 2 || f.dir == 5) (4 - f.rot) % 4 else f.rot
                     emitRect(bx, by, bz, nx, ny, nz, el.x0, el.y0, el.z0, el.x1, el.y1, el.z1,
-                        tile, tint, alpha, ru0, rv0, ru1, rv1, trans = trans, uvRot = uvRot)
+                        tile, tint, alpha, ru0, rv0, ru1, rv1, trans = trans, uvRot = uvRot, cutout = cutout)
                     if (f.cullDir < 0) {
                         // No cullface: visible from both sides (cross plants, thin panels).
                         emitRect(bx, by, bz, -nx, -ny, -nz, el.x0, el.y0, el.z0, el.x1, el.y1, el.z1,
-                            tile, tint, alpha, ru0, rv0, ru1, rv1, trans = trans, uvRot = uvRot)
+                            tile, tint, alpha, ru0, rv0, ru1, rv1, trans = trans, uvRot = uvRot, cutout = cutout)
                     }
                 }
             }
@@ -742,11 +810,9 @@ class PlayerRenderer(
                     val solidAbove = neighbourSolid(x, z, y + 1, excludeWater = true)
 
                     val isWater = blockId == "water"
-                    val alpha = when {
-                        isWater -> WATER_ALPHA
-                        blockId.endsWith("_door") || blockId.endsWith("_trapdoor") -> DOOR_ALPHA
-                        else -> 1f
-                    }
+                    // Doors/trapdoors are cutout blocks in vanilla (binary
+                    // transparency), not blended — no DOOR_ALPHA needed.
+                    val alpha = if (isWater) WATER_ALPHA else 1f
                     // BlueMap-style: the vanilla model wins when one exists. Water is
                     // handled specially below (its model is a plain cube).
                     val model = if (!isWater) ModelLoader.getModel(blockId, props) else null
@@ -756,8 +822,9 @@ class PlayerRenderer(
                     // in the shader — they write depth and sort correctly against
                     // solid geometry (no more far-behind-near painting).
                     val trans = isBlend(blockId)
+                    val cutout = isCutout(blockId)
                     if (model != null && model.elements.isNotEmpty()) {
-                        emitModel(bx, by, bz, model, blockId, biome, alpha, trans, solidAbove, x, z, y)
+                        emitModel(bx, by, bz, model, blockId, biome, alpha, trans, solidAbove, x, z, y, cutout)
                         // All four sides buried → nothing below can be visible.
                         if (y != top && neighbourSolid(x-1, z, y, excludeWater = true) && neighbourSolid(x+1, z, y, excludeWater = true) &&
                             neighbourSolid(x, z-1, y, excludeWater = true) && neighbourSolid(x, z+1, y, excludeWater = true)) break
@@ -769,7 +836,7 @@ class PlayerRenderer(
                     if (blockId in CROSS_BLOCKS) {
                         val p = "minecraft:block/$blockId"
                         paths.add(p)
-                        emitCross(bx, by, bz, atlas.tileFor(p), crossTintOf(blockId, biome), trans)
+                        emitCross(bx, by, bz, atlas.tileFor(p), crossTintOf(blockId, biome))
                         y--
                         continue
                     }
@@ -821,14 +888,14 @@ class PlayerRenderer(
                                     top = !solidAbove, bottom = false,
                                     north = !neighbourSolid(x, z-1, y, excludeWater = true), south = !neighbourSolid(x, z+1, y, excludeWater = true),
                                     west = !neighbourSolid(x-1, z, y, excludeWater = true), east = !neighbourSolid(x+1, z, y, excludeWater = true),
-                                    sideGrass = isGrassSide, trans = trans)
+                                    sideGrass = isGrassSide, trans = trans, cutout = cutout)
                             } else {
                                 val y0 = if (type == "bottom") 0f else 0.5f
                                 emitBox(bx, wby, bz, 0f,y0,0f, 1f,y0+0.5f,1f, tile, topTint, alpha, topTile = topTile,
                                     top = !solidAbove, bottom = false,
                                     north = !neighbourSolid(x, z-1, y, excludeWater = true), south = !neighbourSolid(x, z+1, y, excludeWater = true),
                                     west = !neighbourSolid(x-1, z, y, excludeWater = true), east = !neighbourSolid(x+1, z, y, excludeWater = true),
-                                    sideGrass = isGrassSide, trans = trans)
+                                    sideGrass = isGrassSide, trans = trans, cutout = cutout)
                             }
                         }
                         blockId.endsWith("_stairs") -> {
@@ -857,14 +924,14 @@ class PlayerRenderer(
                             emitBox(bx, by, bz, 0f,0f,0f, 1f,0.5f,1f, tile, topTint, alpha, topTile = topTile,
                                 top = false, bottom = false,
                                 north = sN, south = sS, west = sW, east = sE,
-                                sideGrass = isGrassSide, trans = trans)
+                                sideGrass = isGrassSide, trans = trans, cutout = cutout)
                             // Step top (front half at y+0.5) — exposed where the top box is absent.
-                            emitRect(bx, by, bz, 0f,1f,0f, fx0,0.5f,fz0, fx1,0.5f,fz1, topTile, topTint, alpha, trans = trans)
+                            emitRect(bx, by, bz, 0f,1f,0f, fx0,0.5f,fz0, fx1,0.5f,fz1, topTile, topTint, alpha, trans = trans, cutout = cutout)
                             // Top box: back half, y+0.5..y+1.
                             emitBox(bx, by, bz, bx0,0.5f,bz0, bx1,1f,bz1, tile, topTint, alpha, topTile = topTile,
                                 top = !solidAbove, bottom = true,
                                 north = sN, south = sS, west = sW, east = sE,
-                                sideGrass = isGrassSide, trans = trans)
+                                sideGrass = isGrassSide, trans = trans, cutout = cutout)
                         }
                         blockId.endsWith("_door") -> {
                             // 3px panel (0.1875); half from block-state properties.
@@ -894,7 +961,7 @@ class PlayerRenderer(
                             val sW = !neighbourSolid(x-1, z, y, excludeWater = true); val sE = !neighbourSolid(x+1, z, y, excludeWater = true)
                             emitBox(bx, by, bz, px0,0f,pz0, px1,1f,pz1, doorTile, null, alpha, topTile = topTile,
                                 top = !solidAbove, bottom = false,
-                                north = sN, south = sS, west = sW, east = sE, trans = trans)
+                                north = sN, south = sS, west = sW, east = sE, trans = trans, cutout = true)
                         }
                         blockId.endsWith("_trapdoor") -> {
                             val half = props["half"] ?: "bottom"
@@ -913,12 +980,12 @@ class PlayerRenderer(
                                 val pz0 = if (dz > 0) 1f - t else 0f; val pz1 = if (dz > 0) 1f else t
                                 emitBox(bx, by, bz, px0,0f,pz0, px1,1f,pz1, tile, topTint, alpha, topTile = topTile,
                                     top = !solidAbove, bottom = false,
-                                    north = sN, south = sS, west = sW, east = sE, trans = trans)
+                                    north = sN, south = sS, west = sW, east = sE, trans = trans, cutout = true)
                             } else {
                                 val y0 = if (half == "bottom") 0f else 1f - t
                                 emitBox(bx, by, bz, 0f,y0,0f, 1f,y0+t,1f, tile, topTint, alpha, topTile = topTile,
                                     top = !solidAbove, bottom = false,
-                                    north = sN, south = sS, west = sW, east = sE, trans = trans)
+                                    north = sN, south = sS, west = sW, east = sE, trans = trans, cutout = true)
                             }
                         }
                         blockId.endsWith("_pane") || blockId.contains("glass") || blockId == "iron_bars" -> {
@@ -932,12 +999,12 @@ class PlayerRenderer(
                                 if (e || w || (!n && !so)) {
                                     emitBox(bx, by, bz, 0.4375f,0f,0f, 0.5625f,1f,1f, tile, topTint, 1f, topTile = topTile,
                                         top = !solidAbove, bottom = false,
-                                        north = sN, south = sS, west = sW, east = sE, trans = true)
+                                        north = sN, south = sS, west = sW, east = sE, cutout = true)
                                 }
                                 if (n || so) {
                                     emitBox(bx, by, bz, 0f,0f,0.4375f, 1f,1f,0.5625f, tile, topTint, 1f, topTile = topTile,
                                         top = !solidAbove, bottom = false,
-                                        north = sN, south = sS, west = sW, east = sE, trans = true)
+                                        north = sN, south = sS, west = sW, east = sE, cutout = true)
                                 }
                             } else {
                                 // Full glass cube (cutout look via texture alpha).
@@ -945,15 +1012,21 @@ class PlayerRenderer(
                                     top = !solidAbove, bottom = false,
                                     north = !neighbourSolid(x, z-1, y, excludeWater = true), south = !neighbourSolid(x, z+1, y, excludeWater = true),
                                     west = !neighbourSolid(x-1, z, y, excludeWater = true), east = !neighbourSolid(x+1, z, y, excludeWater = true),
-                                    sideGrass = isGrassSide, trans = true)
+                                    sideGrass = isGrassSide, cutout = true)
                             }
                         }
                         else -> {
-                            // Full cube.
+                            // Full cube. WATER: neighbours that are water count
+                            // as SOLID here (excludeWater=false), so a water body
+                            // renders only its outer shell — no more per-layer
+                            // alpha stacking. Solid blocks keep water see-through
+                            // (excludeWater=true) so riverbeds stay visible.
+                            val ew = !isWater
+                            val topOpen = if (isWater) !neighbourSolid(x, z, y + 1, excludeWater = false) else !solidAbove
                             emitBox(bx, wby, bz, 0f,0f,0f, 1f,1f,1f, tile, topTint, alpha, topTile = topTile,
-                                top = !solidAbove, bottom = false,
-                                north = !neighbourSolid(x, z-1, y), south = !neighbourSolid(x, z+1, y),
-                                west = !neighbourSolid(x-1, z, y), east = !neighbourSolid(x+1, z, y),
+                                top = topOpen, bottom = false,
+                                north = !neighbourSolid(x, z-1, y, excludeWater = ew), south = !neighbourSolid(x, z+1, y, excludeWater = ew),
+                                west = !neighbourSolid(x-1, z, y, excludeWater = ew), east = !neighbourSolid(x+1, z, y, excludeWater = ew),
                                 sideGrass = isGrassSide, trans = trans)
                         }
                     }
@@ -965,6 +1038,7 @@ class PlayerRenderer(
             }
         }
         val n = verts.size / 12
+        val cn = cutVerts.size / 12
         var tn = 0
         if (transFaces.isNotEmpty()) {
             transFaces.sortByDescending { it.first }
@@ -975,21 +1049,22 @@ class PlayerRenderer(
         }
         if (meshLogCount.incrementAndGet() <= 30) {
             val surf = heights.sumOf { row -> row.count { it != Int.MIN_VALUE } }
-            Logger.d("mesh($chunkX,$chunkZ): surface=$surf/256 verts=$n trans=$tn paths=${paths.size}")
+            Logger.d("mesh($chunkX,$chunkZ): surface=$surf/256 verts=$n cut=$cn trans=$tn paths=${paths.size}")
         }
         return ChunkMesh(
             toFloatBuffer(verts), n,
             if (tn > 0) toFloatBuffer(transVerts) else null, tn,
+            if (cn > 0) toFloatBuffer(cutVerts) else null, cn,
             paths
         )
     }
 
     /** True-blend blocks: drawn in the translucent pass (alpha blending, no
-     *  depth write, far→near per-face sorting). Water, stained glass, doors,
-     *  trapdoors and ice genuinely mix with what is behind them. */
+     *  depth write, far→near per-face sorting). Water, stained glass and ice
+     *  genuinely mix with what is behind them. Doors/trapdoors are NOT here —
+     *  in vanilla they are cutout (binary transparency), not blended. */
     private fun isBlend(id: String): Boolean =
         id == "water" || id.contains("stained_glass") || id == "tinted_glass" ||
-        id.endsWith("_door") || id.endsWith("_trapdoor") ||
         id == "ice" || id == "frosted_ice" || id == "packed_ice" || id == "blue_ice" ||
         id.contains("portal") || id == "beacon" || id == "slime_block" || id == "honey_block"
 
@@ -1016,6 +1091,7 @@ class PlayerRenderer(
         id.endsWith("_bud") || id.endsWith("_coral") ||
         id.endsWith("_button") || id.endsWith("_pressure_plate") ||
         id.endsWith("_fence") || id.endsWith("_fence_gate") || id.endsWith("_wall") ||
+        id.endsWith("_door") || id.endsWith("_trapdoor") ||
         id.contains("candle") || id.contains("carpet") || id == "snow"
 
     /** Hollow/translucent blocks never occlude neighbours (solidAt): fences,
@@ -1119,17 +1195,20 @@ class PlayerRenderer(
     data class ChunkMesh(
         val vertexBuffer: FloatBuffer,
         val vertexCount: Int,
-        /** Translucent geometry (water, glass, plants, doors): drawn after the
-         *  opaque pass with alpha blending, far→near. */
+        /** Translucent geometry (water, stained glass, ice): drawn last with
+         *  alpha blending, far→near. */
         val transBuffer: FloatBuffer?,
         val transCount: Int,
+        /** Cutout geometry (plants, fences, glass panes, doors, leaves): drawn
+         *  after opaque with alpha-discard and depth writes. */
+        val cutBuffer: FloatBuffer?,
+        val cutCount: Int,
         /** Texture paths referenced by this mesh (for resolving missing textures). */
         val paths: Set<String>
     )
 
     companion object {
         private const val WATER_ALPHA = 0.65f
-        private const val DOOR_ALPHA = 0.85f
 
         /** Blocks rendered as double-sided X-shaped quads (vanilla cross model). */
         private val CROSS_BLOCKS = setOf(
@@ -1196,10 +1275,29 @@ class PlayerRenderer(
             out vec4 fragColor;
             void main() {
                 vec4 tex = texture(uTex, vUV);
-                // Cutout blocks (plants, fences, glass…) live in the opaque pass;
-                // their fully-transparent pixels must be discarded, not blended,
-                // so they still write depth and sort correctly.
-                if (tex.a < 0.05) discard;
+                vec3 normal = normalize(vNormal);
+                vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
+                float diff = max(dot(normal, lightDir), 0.0);
+                float light = 0.5 + 0.5 * diff;
+                fragColor = vec4(tex.rgb * vColor.rgb * light, tex.a * vColor.a);
+            }
+        """
+
+        /** Cutout pass: same lighting, plus alpha-discard. Kept in a SEPARATE
+         *  program so the opaque pass stays discard-free and keeps early-Z —
+         *  a single shader with discard disabled early-Z for every block and
+         *  cost a large slice of frame time. */
+        private const val CUTOUT_FRAGMENT_SHADER = """
+            #version 300 es
+            precision mediump float;
+            uniform sampler2D uTex;
+            in vec2 vUV;
+            in vec3 vNormal;
+            in vec4 vColor;
+            out vec4 fragColor;
+            void main() {
+                vec4 tex = texture(uTex, vUV);
+                if (tex.a < 0.5) discard;
                 vec3 normal = normalize(vNormal);
                 vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                 float diff = max(dot(normal, lightDir), 0.0);
