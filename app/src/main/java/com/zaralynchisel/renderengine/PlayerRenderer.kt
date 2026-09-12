@@ -126,20 +126,32 @@ class PlayerRenderer(
             GLES30.glEnable(GLES30.GL_DEPTH_TEST)
             GLES30.glEnable(GLES30.GL_CULL_FACE)
             GLES30.glCullFace(GLES30.GL_BACK)
-            // Reversed-Z depth: far→0, near→1. Depth is tested with GL_GREATER
-            // and cleared to 0. Near the far plane the depth value sits near 0,
-            // where IEEE floats have the most mantissa density, so distant
-            // geometry keeps far better depth separation than the classic
-            // near→0 mapping (matters once the view distance grows).
-            GLES30.glDepthRangef(0f, 1f) // standard range; the reversal is in the matrix
-            GLES30.glDepthFunc(GLES30.GL_GREATER)
-            GLES30.glClearDepthf(0f)
-            // NOTE: no glFrontFace here. Front/back-face winding is judged in
-            // WINDOW coordinates (x,y); the reversed-Z projection only flips the
-            // z row, so winding is unchanged and the default CCW stays correct.
-            // A glFrontFace(GL_CW) added earlier flipped every face's culling —
-            // blocks rendered their three FAR faces (the face-flip symptom
-            // previously blamed on depth).
+            // STANDARD depth: near→0, far→1, GL_LESS, cleared to 1. Three
+            // reversed-Z variants (depthRangef(1,0), projection z-row flip,
+            // each with GL_GREATER + clear 0) all produced far-over-near
+            // artifacts on the target device while simulating correctly on
+            // the CPU — the driver mishandles the reversed comparison. At
+            // our render distance (~200 blocks) standard 24-bit depth has
+            // ~1e-5 precision per block, so the reversed-Z float advantage
+            // is irrelevant. No glFrontFace override: winding is judged in
+            // window coordinates and the default CCW is correct.
+            GLES30.glDepthRangef(0f, 1f)
+            GLES30.glDepthFunc(GLES30.GL_LESS)
+            GLES30.glClearDepthf(1f)
+            // One-shot GL state diagnostics: if anything still renders wrong,
+            // the log shows the actual device state.
+            runCatching {
+                val ib = java.nio.IntBuffer.allocate(4)
+                GLES30.glGetIntegerv(GLES30.GL_DEPTH_BITS, ib)
+                val depthBits = ib.get(0)
+                ib.clear(); GLES30.glGetIntegerv(GLES30.GL_DEPTH_FUNC, ib)
+                val depthFunc = ib.get(0)
+                ib.clear(); GLES30.glGetIntegerv(GLES30.GL_FRONT_FACE, ib)
+                val frontFace = ib.get(0)
+                ib.clear(); GLES30.glGetIntegerv(GLES30.GL_CULL_FACE_MODE, ib)
+                val cullMode = ib.get(0)
+                Logger.d("GL state: depthBits=$depthBits depthFunc=$depthFunc frontFace=$frontFace cullMode=$cullMode")
+            }
             shaderProgram = createProgram(TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER)
             cutoutProgram = createProgram(TERRAIN_VERTEX_SHADER, CUTOUT_FRAGMENT_SHADER)
             glReady = shaderProgram != 0 && cutoutProgram != 0
@@ -181,22 +193,13 @@ class PlayerRenderer(
         val left = bottom * aspect
         val right = top * aspect
         android.opengl.Matrix.frustumM(projectionMatrix, 0, left, right, bottom, top, near, far)
-        // Reversed-Z baked into the PROJECTION MATRIX itself: flip the z row so
-        // near→NDC +1 and far→NDC -1. Depth then increases with closeness and
-        // GL_GREATER + clear 0 keep far→near ordering. This no longer relies on
-        // glDepthRangef(1,0), which several drivers clamp back to 0..1 — on such
-        // devices the old setup made FAR fragments (depth≈1) pass over NEAR ones
-        // (depth≈0) and every block showed its back faces.
-        projectionMatrix[10] = -projectionMatrix[10]
-        projectionMatrix[14] = -projectionMatrix[14]
     }
 
     override fun onDrawFrame(gl: GL10?) {
         try {
-            // Reversed-Z depth state is GL state that must survive per frame
-            // (the reversal lives in the projection matrix, see recomputeProjection).
+            // Depth state must survive per frame (standard: LESS, clear 1).
             GLES30.glDepthRangef(0f, 1f)
-            GLES30.glClearDepthf(0f)
+            GLES30.glClearDepthf(1f)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
             // Camera sanity: NaN coordinates would collapse the chunk set to
             // (0,0) and cause load/drop cycling — log it once if it happens.
@@ -545,11 +548,19 @@ class PlayerRenderer(
             if (info == null) return false
             val id = info.name.substringAfter(':')
             if (id.endsWith("air")) return false
+            // Water must be checked BEFORE the translucent family: water IS in
+            // isBlend/isTranslucent, so the old ordering made water never solid
+            // and the excludeWater flag a no-op — water bodies rendered every
+            // internal face and their alpha stacked layer over layer. Now water
+            // is solid for water's own shell culling (excludeWater=false: only
+            // the outer surface of a water body renders, like vanilla) and air
+            // for solid blocks' face checks (excludeWater=true: riverbeds stay
+            // visible through water).
+            if (id == "water") return !excludeWater
             // Hollow/translucent blocks (fences, leaves, glass, plants…) never
             // occlude neighbours — otherwise cube faces behind a fence or inside
             // a tree canopy get culled and vanish.
             if (isTranslucent(id)) return false
-            if (excludeWater && id == "water") return false
             return true
         }
 
